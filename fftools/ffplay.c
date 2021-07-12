@@ -49,6 +49,9 @@
 #include "libavcodec/avfft.h"
 #include "libswresample/swresample.h"
 
+#include "libavformat/dashdec.h"
+#include "libavformat/http.h"
+
 #if CONFIG_AVFILTER
 # include "libavfilter/avfilter.h"
 # include "libavfilter/buffersink.h"
@@ -110,6 +113,8 @@ const int program_birth_year = 2003;
 #define USE_ONEPASS_SUBTITLE_RENDER 1
 
 static unsigned sws_flags = SWS_BICUBIC;
+
+int st_index[AVMEDIA_TYPE_NB];
 
 typedef struct MyAVPacketList {
     AVPacket *pkt;
@@ -203,6 +208,7 @@ typedef struct Decoder {
 
 typedef struct VideoState {
     SDL_Thread *read_tid;
+    SDL_Thread *monitor_tid;
     const AVInputFormat *iformat;
     int abort_request;
     int force_refresh;
@@ -2596,6 +2602,12 @@ static int stream_component_open(VideoState *is, int stream_index)
 
     codec = avcodec_find_decoder(avctx->codec_id);
 
+    switch(avctx->codec_type) {
+        case AVMEDIA_TYPE_AUDIO   : st_index[AVMEDIA_TYPE_AUDIO]    = stream_index;  break;
+        case AVMEDIA_TYPE_SUBTITLE: st_index[AVMEDIA_TYPE_SUBTITLE] = stream_index; break;
+        case AVMEDIA_TYPE_VIDEO   : st_index[AVMEDIA_TYPE_VIDEO]    = stream_index;  break;
+    }
+
     switch(avctx->codec_type){
         case AVMEDIA_TYPE_AUDIO   : is->last_audio_stream    = stream_index; forced_codec_name =    audio_codec_name; break;
         case AVMEDIA_TYPE_SUBTITLE: is->last_subtitle_stream = stream_index; forced_codec_name = subtitle_codec_name; break;
@@ -2751,13 +2763,84 @@ static int is_realtime(AVFormatContext *s)
     return 0;
 }
 
+
+/* 
+  BUPT
+  this function is for abr schedule
+  tpt(Mbps), buffer(KB)
+*/
+static void abr_update(enum AVMediaType type, AVFormatContext* ic, VideoState* is) {
+    DASHContext* dc = ic->priv_data;
+    struct representation* cur_rep = NULL;
+    URLContext* url = NULL;
+    HTTPContext* http = NULL;
+    float tpt = -1, buffer_level = -1;
+    int choosen_idx = -1;
+    
+    if (!dc) av_log(is, AV_LOG_ERROR, "dash context is null\n");
+    // NOTE: assume stream_index is sorted by VIDEO/AUDIO/SUBTITLE
+    if (type == AVMEDIA_TYPE_VIDEO) {
+        cur_rep = dc->videos[st_index[type]];
+        buffer_level = is->videoq.size;
+    } else if (type == AVMEDIA_TYPE_AUDIO) {
+        // TODO: check is it right?
+        cur_rep = dc->audios[st_index[type] - dc->n_videos];
+        buffer_level = is->audioq.size;
+    }
+    if (!cur_rep->input) return ;
+    url = cur_rep->input->opaque;
+    http = url->priv_data; 
+    
+    uint64_t t1 = av_gettime();
+    int timeout = 0;
+    while (http && http->http_req_end == 0) {
+        av_usleep(500 * 1000);
+        if ( (av_gettime() - t1) / 1000 > 5000 ) {
+            timeout = 1;
+            break;
+        }
+    }
+    if (http && http->http_req_end > 0) {
+        tpt = 8 * (float)http->internal_off / (http->http_req_end - http->http_req_start);
+    } else if (http && http->internal_off > 0) {
+        tpt = 8 * (float)http->internal_off / (http->http_req_last - http->http_req_start);
+    } else {
+        return ;
+    }
+    
+    dc->dashdec_add_metric(ic, type, tpt, buffer_level);
+    
+    choosen_idx = dc->dashdec_get_stream(ic, type);
+    if (choosen_idx >= 0 && choosen_idx != st_index[type]) {
+        stream_component_close(is, st_index[type]);
+        stream_component_open(is, choosen_idx);
+        st_index[type] = choosen_idx;
+    }
+
+    av_log(ic, AV_LOG_INFO, "DASH Metric(%s): tpt=%f, buffer=%f, choosen=%d, timeout=%d\n",
+            type == AVMEDIA_TYPE_VIDEO ? "video" : "audio", tpt, buffer_level, choosen_idx, timeout);
+}
+
+static int monitor_thread(void* arg) {
+    VideoState *is = arg;
+    AVFormatContext* ic = is->ic;
+
+    while (!is->abort_request) {
+        if (st_index[AVMEDIA_TYPE_VIDEO] >= 0) abr_update(AVMEDIA_TYPE_VIDEO, ic, is);
+        if (st_index[AVMEDIA_TYPE_AUDIO] >= 0) abr_update(AVMEDIA_TYPE_AUDIO, ic, is);
+        av_usleep(500 * 1000);
+    }
+
+    return 0;
+}
+
 /* this thread gets the stream from the disk or the network */
 static int read_thread(void *arg)
 {
     VideoState *is = arg;
     AVFormatContext *ic = NULL;
     int err, i, ret;
-    int st_index[AVMEDIA_TYPE_NB];
+    // int st_index[AVMEDIA_TYPE_NB];
     AVPacket *pkt = NULL;
     int64_t stream_start_time;
     int pkt_in_play_range = 0;
@@ -2931,7 +3014,11 @@ static int read_thread(void *arg)
 
     if (infinite_buffer < 0 && is->realtime)
         infinite_buffer = 1;
-
+    
+    // uint64_t last_abr_time = -1;
+    if(!strcmp(ic->iformat->name, "dash")) {
+        is->monitor_tid = SDL_CreateThread(monitor_thread, "monitor_thread", is);
+    }
     for (;;) {
         if (is->abort_request)
             break;
@@ -3015,6 +3102,7 @@ static int read_thread(void *arg)
             }
         }
         ret = av_read_frame(ic, pkt);
+        
         if (ret < 0) {
             if ((ret == AVERROR_EOF || avio_feof(ic->pb)) && !is->eof) {
                 if (is->video_stream >= 0)

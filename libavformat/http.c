@@ -18,9 +18,7 @@
  * License along with FFmpeg; if not, write to the Free Software
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
-
 #include "config.h"
-
 #if CONFIG_ZLIB
 #include <zlib.h>
 #endif /* CONFIG_ZLIB */
@@ -46,92 +44,102 @@
 /* The IO buffer size is unrelated to the max URL size in itself, but needs
  * to be large enough to fit the full request headers (including long
  * path names). */
-#define BUFFER_SIZE   (MAX_URL_SIZE + HTTP_HEADERS_SIZE)
-#define MAX_REDIRECTS 8
-#define HTTP_SINGLE   1
-#define HTTP_MUTLI    2
-#define MAX_EXPIRY    19
-#define WHITESPACES " \n\t\r"
-typedef enum {
-    LOWER_PROTO,
-    READ_HEADERS,
-    WRITE_REPLY_HEADERS,
-    FINISH
-}HandshakeState;
-
-typedef struct HTTPContext {
-    const AVClass *class;
-    URLContext *hd;
-    unsigned char buffer[BUFFER_SIZE], *buf_ptr, *buf_end;
-    int line_count;
-    int http_code;
-    /* Used if "Transfer-Encoding: chunked" otherwise -1. */
-    uint64_t chunksize;
-    int chunkend;
-    uint64_t off, end_off, filesize;
-    char *location;
-    HTTPAuthState auth_state;
-    HTTPAuthState proxy_auth_state;
-    char *http_proxy;
-    char *headers;
-    char *mime_type;
-    char *http_version;
-    char *user_agent;
-    char *referer;
-    char *content_type;
-    /* Set if the server correctly handles Connection: close and will close
-     * the connection after feeding us the content. */
-    int willclose;
-    int seekable;           /**< Control seekability, 0 = disable, 1 = enable, -1 = probe. */
-    int chunked_post;
-    /* A flag which indicates if the end of chunked encoding has been sent. */
-    int end_chunked_post;
-    /* A flag which indicates we have finished to read POST reply. */
-    int end_header;
-    /* A flag which indicates if we use persistent connections. */
-    int multiple_requests;
-    uint8_t *post_data;
-    int post_datalen;
-    int is_akamai;
-    int is_mediagateway;
-    char *cookies;          ///< holds newline (\n) delimited Set-Cookie header field values (without the "Set-Cookie: " field name)
-    /* A dictionary containing cookies keyed by cookie name */
-    AVDictionary *cookie_dict;
-    int icy;
-    /* how much data was read since the last ICY metadata packet */
-    uint64_t icy_data_read;
-    /* after how many bytes of read data a new metadata packet will be found */
-    uint64_t icy_metaint;
-    char *icy_metadata_headers;
-    char *icy_metadata_packet;
-    AVDictionary *metadata;
-#if CONFIG_ZLIB
-    int compressed;
-    z_stream inflate_stream;
-    uint8_t *inflate_buffer;
-#endif /* CONFIG_ZLIB */
-    AVDictionary *chained_options;
-    /* -1 = try to send if applicable, 0 = always disabled, 1 = always enabled */
-    int send_expect_100;
-    char *method;
-    int reconnect;
-    int reconnect_at_eof;
-    int reconnect_on_network_error;
-    int reconnect_streamed;
-    int reconnect_delay_max;
-    char *reconnect_on_http_error;
-    int listen;
-    char *resource;
-    int reply_code;
-    int is_multi_client;
-    HandshakeState handshake_step;
-    int is_connected_server;
-} HTTPContext;
+//   #define BUFFER_SIZE   (MAX_URL_SIZE + HTTP_HEADERS_SIZE)
+//   #define MAX_REDIRECTS 8
+//   #define HTTP_SINGLE   1
+//   #define HTTP_MUTLI    2
+//   #define MAX_EXPIRY    19
+//   #define WHITESPACES " \n\t\r"
+//   typedef enum {
+//       LOWER_PROTO,
+//       READ_HEADERS,
+//       WRITE_REPLY_HEADERS,
+//       FINISH
+//   }HandshakeState;
+//
+//   typedef struct HTTPContext {
+//       const AVClass *class;
+//       URLContext *hd;
+//       unsigned char buffer[BUFFER_SIZE], *buf_ptr, *buf_end;
+//       int line_count;
+//       int http_code;
+//       /* Used if "Transfer-Encoding: chunked" otherwise -1. */
+//       uint64_t chunksize;
+//       int chunkend;
+//       uint64_t off, end_off, filesize;
+//       char *location;
+//       HTTPAuthState auth_state;
+//       HTTPAuthState proxy_auth_state;
+//       char *http_proxy;
+//       char *headers;
+//       char *mime_type;
+//       char *http_version;
+//       char *user_agent;
+//       char *referer;
+//       char *content_type;
+//       /* Set if the server correctly handles Connection: close and will close
+//        * the connection after feeding us the content. */
+//       int willclose;
+//       int seekable;           /**< Control seekability, 0 = disable, 1 = enable, -1 = probe. */
+//       int chunked_post;
+//       /* A flag which indicates if the end of chunked encoding has been sent. */
+//       int end_chunked_post;
+//       /* A flag which indicates we have finished to read POST reply. */
+//       int end_header;
+//       /* A flag which indicates if we use persistent connections. */
+//       int multiple_requests;
+//       uint8_t *post_data;
+//       int post_datalen;
+//       int is_akamai;
+//       int is_mediagateway;
+//       char *cookies;          ///< holds newline (\n) delimited Set-Cookie header field values (without the "Set-Cookie: " field name)
+//       /* A dictionary containing cookies keyed by cookie name */
+//       AVDictionary *cookie_dict;
+//       int icy;
+//       /* how much data was read since the last ICY metadata packet */
+//       uint64_t icy_data_read;
+//       /* after how many bytes of read data a new metadata packet will be found */
+//       uint64_t icy_metaint;
+//       char *icy_metadata_headers;
+//       char *icy_metadata_packet;
+//       AVDictionary *metadata;
+//   #if CONFIG_ZLIB
+//       int compressed;
+//       z_stream inflate_stream;
+//       uint8_t *inflate_buffer;
+//   #endif /* CONFIG_ZLIB */
+//       AVDictionary *chained_options;
+//       /* -1 = try to send if applicable, 0 = always disabled, 1 = always enabled */
+//       int send_expect_100;
+//       char *method;
+//       int reconnect;
+//       int reconnect_at_eof;
+//       int reconnect_on_network_error;
+//       int reconnect_streamed;
+//       int reconnect_delay_max;
+//       char *reconnect_on_http_error;
+//       int listen;
+//       char *resource;
+//       int reply_code;
+//       int is_multi_client;
+//       HandshakeState handshake_step;
+//       int is_connected_server;
+//       
+//       // BUPT
+//       uint64_t http_req_start;
+//       uint64_t http_req_end;
+//       uint64_t internal_off;
+//       uint64_t internal_read_pos;
+//       uint64_t internal_max_size;
+//       uint8_t* internal_buffer;
+//       int init_off;
+//   } HTTPContext;
 
 #define OFFSET(x) offsetof(HTTPContext, x)
 #define D AV_OPT_FLAG_DECODING_PARAM
 #define E AV_OPT_FLAG_ENCODING_PARAM
 #define DEFAULT_USER_AGENT "Lavf/" AV_STRINGIFY(LIBAVFORMAT_VERSION)
+
 
 static const AVOption options[] = {
     { "seekable", "control seekability of connection", OFFSET(seekable), AV_OPT_TYPE_BOOL, { .i64 = -1 }, -1, 1, D },
@@ -615,6 +623,16 @@ static int http_open(URLContext *h, const char *uri, int flags,
     HTTPContext *s = h->priv_data;
     int ret;
 
+// BUPT
+    if (s->internal_buffer != NULL) {
+        free(s->internal_buffer);
+    }
+    s->http_req_end = 0;
+    s->internal_max_size = 1024 * 1024 * 100;
+    s->internal_buffer = (uint8_t*)malloc(sizeof(uint8_t) * s->internal_max_size);
+    s->internal_off = 0;
+    s->internal_read_pos = 0;
+    s->init_off = 0;
     if( s->seekable == 1 )
         h->is_streamed = 0;
     else
@@ -1224,7 +1242,6 @@ static int http_read_header(URLContext *h, int *new_location)
             return err;
 
         av_log(h, AV_LOG_TRACE, "header='%s'\n", line);
-
         err = process_line(h, line, s->line_count, new_location);
         if (err < 0)
             return err;
@@ -1285,7 +1302,8 @@ static int http_connect(URLContext *h, const char *path, const char *local_path,
     uint64_t off = s->off;
     const char *method;
     int send_expect_100 = 0;
-
+    s->http_req_start = av_gettime();
+    
     av_bprint_init_for_buffer(&request, s->buffer, sizeof(s->buffer));
 
     /* send http header */
@@ -1389,7 +1407,7 @@ static int http_connect(URLContext *h, const char *path, const char *local_path,
         err = AVERROR(EINVAL);
         goto done;
     }
-
+    
     if ((err = ffurl_write(s->hd, request.str, request.len)) < 0)
         goto done;
 
@@ -1484,11 +1502,41 @@ static int http_buf_read(URLContext *h, uint8_t *buf, int size)
             len = size;
         memcpy(buf, s->buf_ptr, len);
         s->buf_ptr += len;
+        s->init_off = len;
     } else {
         uint64_t target_end = s->end_off ? s->end_off : s->filesize;
         if ((!s->willclose || s->chunksize == UINT64_MAX) && s->off >= target_end)
             return AVERROR_EOF;
-        len = ffurl_read(s->hd, buf, size);
+        
+       
+        if (s->http_req_end == 0) {
+            long tmp = ffurl_read(s->hd, s->internal_buffer + s->internal_off, s->internal_max_size - s->internal_off);
+            if (tmp >= 0) {
+                s->internal_off += tmp;
+                s->http_req_last = av_gettime();
+            }
+            if (s->internal_off >= target_end - s->init_off) {
+                s->http_req_end = av_gettime();
+            }
+        }
+        uint64_t rest = s->internal_off - s->internal_read_pos;
+        if (rest > size) {
+            memcpy(buf, s->internal_buffer + s->internal_read_pos, size);
+            s->internal_read_pos += size;
+            len = size;
+        } else {
+            if (rest > 0) {
+                memcpy(buf, s->internal_buffer + s->internal_read_pos, rest);
+                s->internal_read_pos += rest;
+                len = rest;
+            } else {
+                len = 0;
+            }
+        }
+
+       
+        // len = ffurl_read(s->hd, buf, size);
+    
         if ((!len || len == AVERROR_EOF) &&
             (!s->willclose || s->chunksize == UINT64_MAX) && s->off < target_end) {
             av_log(h, AV_LOG_ERROR,
@@ -1500,11 +1548,20 @@ static int http_buf_read(URLContext *h, uint8_t *buf, int size)
     }
     if (len > 0) {
         s->off += len;
+        
+        uint64_t target_end = s->end_off ? s->end_off : s->filesize;
+        if (s->off >= target_end) {
+            if (s->http_req_end == 0) {
+                s->http_req_end = av_gettime();
+            }
+        }
+        
         if (s->chunksize > 0 && s->chunksize != UINT64_MAX) {
             av_assert0(s->chunksize >= len);
             s->chunksize -= len;
         }
     }
+    
     return len;
 }
 
@@ -1680,13 +1737,12 @@ static int store_icy(URLContext *h, int size)
 static int http_read(URLContext *h, uint8_t *buf, int size)
 {
     HTTPContext *s = h->priv_data;
-
     if (s->icy_metaint > 0) {
         size = store_icy(h, size);
         if (size < 0)
             return size;
     }
-
+    
     size = http_read_stream(h, buf, size);
     if (size > 0)
         s->icy_data_read += size;
@@ -1753,7 +1809,9 @@ static int http_close(URLContext *h)
 {
     int ret = 0;
     HTTPContext *s = h->priv_data;
-
+        
+    // stop_internal_buffer();
+    if (s->internal_buffer) free(s->internal_buffer);
 #if CONFIG_ZLIB
     inflateEnd(&s->inflate_stream);
     av_freep(&s->inflate_buffer);

@@ -27,137 +27,205 @@
 #include "internal.h"
 #include "avio_internal.h"
 #include "dash.h"
+#include "dashdec.h"
+#include "abr.h"
 
 #define INITIAL_BUFFER_SIZE 32768
 #define MAX_BPRINT_READ_SIZE (UINT_MAX - 1)
 #define DEFAULT_MANIFEST_SIZE 8 * 1024
 
-struct fragment {
-    int64_t url_offset;
-    int64_t size;
-    char *url;
-};
+//   struct fragment {
+//       int64_t url_offset;
+//       int64_t size;
+//       char *url;
+//   };
+//
+//   /*
+//    * reference to : ISO_IEC_23009-1-DASH-2012
+//    * Section: 5.3.9.6.2
+//    * Table: Table 17 — Semantics of SegmentTimeline element
+//    * */
+//   struct timeline {
+//       /* starttime: Element or Attribute Name
+//        * specifies the MPD start time, in @timescale units,
+//        * the first Segment in the series starts relative to the beginning of the Period.
+//        * The value of this attribute must be equal to or greater than the sum of the previous S
+//        * element earliest presentation time and the sum of the contiguous Segment durations.
+//        * If the value of the attribute is greater than what is expressed by the previous S element,
+//        * it expresses discontinuities in the timeline.
+//        * If not present then the value shall be assumed to be zero for the first S element
+//        * and for the subsequent S elements, the value shall be assumed to be the sum of
+//        * the previous S element's earliest presentation time and contiguous duration
+//        * (i.e. previous S@starttime + @duration * (@repeat + 1)).
+//        * */
+//       int64_t starttime;
+//       /* repeat: Element or Attribute Name
+//        * specifies the repeat count of the number of following contiguous Segments with
+//        * the same duration expressed by the value of @duration. This value is zero-based
+//        * (e.g. a value of three means four Segments in the contiguous series).
+//        * */
+//       int64_t repeat;
+//       /* duration: Element or Attribute Name
+//        * specifies the Segment duration, in units of the value of the @timescale.
+//        * */
+//       int64_t duration;
+//   };
+//
+//   /*
+//    * Each playlist has its own demuxer. If it is currently active,
+//    * it has an opened AVIOContext too, and potentially an AVPacket
+//    * containing the next packet from this stream.
+//    */
+//   struct representation {
+//       char *url_template;
+//       AVIOContext pb;
+//       AVIOContext *input;
+//       AVFormatContext *parent;
+//       AVFormatContext *ctx;
+//       int stream_index;
+//
+//       char *id;
+//       char *lang;
+//       int bandwidth;
+//       AVRational framerate;
+//       AVStream *assoc_stream; /* demuxer stream associated with this representation */
+//
+//       int n_fragments;
+//       struct fragment **fragments; /* VOD list of fragment for profile */
+//
+//       int n_timelines;
+//       struct timeline **timelines;
+//
+//       int64_t first_seq_no;
+//       int64_t last_seq_no;
+//       int64_t start_number; /* used in case when we have dynamic list of segment to know which segments are new one*/
+//
+//       int64_t fragment_duration;
+//       int64_t fragment_timescale;
+//
+//       int64_t presentation_timeoffset;
+//
+//       int64_t cur_seq_no;
+//       int64_t cur_seg_offset;
+//       int64_t cur_seg_size;
+//       struct fragment *cur_seg;
+//
+//       /* Currently active Media Initialization Section */
+//       struct fragment *init_section;
+//       uint8_t *init_sec_buf;
+//       uint32_t init_sec_buf_size;
+//       uint32_t init_sec_data_len;
+//       uint32_t init_sec_buf_read_offset;
+//       int64_t cur_timestamp;
+//       int is_restart_needed;
+//   };
+//
+//   typedef struct DASHContext {
+//       const AVClass *class;
+//       char *base_url;
+//
+//       int n_videos;
+//       struct representation **videos;
+//       int n_audios;
+//       struct representation **audios;
+//       int n_subtitles;
+//       struct representation **subtitles;
+//
+//       /* MediaPresentationDescription Attribute */
+//       uint64_t media_presentation_duration;
+//       uint64_t suggested_presentation_delay;
+//       uint64_t availability_start_time;
+//       uint64_t availability_end_time;
+//       uint64_t publish_time;
+//       uint64_t minimum_update_period;
+//       uint64_t time_shift_buffer_depth;
+//       uint64_t min_buffer_time;
+//
+//       /* Period Attribute */
+//       uint64_t period_duration;
+//       uint64_t period_start;
+//
+//       /* AdaptationSet Attribute */
+//       char *adaptionset_lang;
+//
+//       int is_live;
+//       AVIOInterruptCB *interrupt_callback;
+//       char *allowed_extensions;
+//       AVDictionary *avio_opts;
+//       int max_url_size;
+//
+//       /* Flags for init section*/
+//       int is_init_section_common_video;
+//       int is_init_section_common_audio;
+//       int is_init_section_common_subtitle;
+//       
+//       // BUPT
+//       ABRContext* audio_abr;
+//       ABRContext* video_abr;
+//
+//       void (*dashdec_add_metric)(AVFormatContext *s, enum AVMediaType type, float tpt, float buffer_level);
+//       int (*dashdec_get_stream)(AVFormatContext *s, enum AVMediaType type);
+//   } DASHContext;
 
-/*
- * reference to : ISO_IEC_23009-1-DASH-2012
- * Section: 5.3.9.6.2
- * Table: Table 17 — Semantics of SegmentTimeline element
- * */
-struct timeline {
-    /* starttime: Element or Attribute Name
-     * specifies the MPD start time, in @timescale units,
-     * the first Segment in the series starts relative to the beginning of the Period.
-     * The value of this attribute must be equal to or greater than the sum of the previous S
-     * element earliest presentation time and the sum of the contiguous Segment durations.
-     * If the value of the attribute is greater than what is expressed by the previous S element,
-     * it expresses discontinuities in the timeline.
-     * If not present then the value shall be assumed to be zero for the first S element
-     * and for the subsequent S elements, the value shall be assumed to be the sum of
-     * the previous S element's earliest presentation time and contiguous duration
-     * (i.e. previous S@starttime + @duration * (@repeat + 1)).
-     * */
-    int64_t starttime;
-    /* repeat: Element or Attribute Name
-     * specifies the repeat count of the number of following contiguous Segments with
-     * the same duration expressed by the value of @duration. This value is zero-based
-     * (e.g. a value of three means four Segments in the contiguous series).
-     * */
-    int64_t repeat;
-    /* duration: Element or Attribute Name
-     * specifies the Segment duration, in units of the value of the @timescale.
-     * */
-    int64_t duration;
-};
 
-/*
- * Each playlist has its own demuxer. If it is currently active,
- * it has an opened AVIOContext too, and potentially an AVPacket
- * containing the next packet from this stream.
- */
-struct representation {
-    char *url_template;
-    AVIOContext pb;
-    AVIOContext *input;
-    AVFormatContext *parent;
-    AVFormatContext *ctx;
-    int stream_index;
+// BUPT
+static void dashdec_add_metric(AVFormatContext* s, enum AVMediaType type, float tpt, float buffer_level) {
+    DASHContext* c = s->priv_data;
+    if (type != AVMEDIA_TYPE_VIDEO && type != AVMEDIA_TYPE_AUDIO) {
+        av_log(c, AV_LOG_ERROR, "mediatype not found when adding metric");
+    }
+    abr_add_metric(type == AVMEDIA_TYPE_VIDEO ? c->video_abr : c->audio_abr,
+                   tpt,
+                   buffer_level);
+}
 
-    char *id;
-    char *lang;
-    int bandwidth;
-    AVRational framerate;
-    AVStream *assoc_stream; /* demuxer stream associated with this representation */
+static int dashdec_get_stream(AVFormatContext* s, enum AVMediaType type) {
+    DASHContext* c = s->priv_data; 
+    int size, *bandwidth, ai;
 
-    int n_fragments;
-    struct fragment **fragments; /* VOD list of fragment for profile */
+    if (type != AVMEDIA_TYPE_VIDEO && type != AVMEDIA_TYPE_AUDIO) {
+        av_log(c, AV_LOG_ERROR, "mediatype not found when getting stream");
+    }
 
-    int n_timelines;
-    struct timeline **timelines;
+    
+    if (type == AVMEDIA_TYPE_VIDEO) {
+        size = c->n_videos;
+        bandwidth = (int*)malloc(sizeof(int) * size);
+        for (int i = 0; i < size; ++i) {
+            bandwidth[i] = c->videos[i]->bandwidth;
+        }
+        ai = abr_get_stream(c->video_abr, bandwidth, size);
+        return ai == -1 ? -1 : c->videos[ai]->stream_index;
+    } else {
+        size = c->n_audios;
+        bandwidth = (int*)malloc(sizeof(int) * size);
+        for (int i = 0; i < size; ++i) {
+            bandwidth[i] = c->audios[i]->bandwidth;
+        }
+        ai = abr_get_stream(c->audio_abr, bandwidth, size);
+        return ai == -1 ? -1 : c->audios[ai]->stream_index;
+    }
 
-    int64_t first_seq_no;
-    int64_t last_seq_no;
-    int64_t start_number; /* used in case when we have dynamic list of segment to know which segments are new one*/
+}
 
-    int64_t fragment_duration;
-    int64_t fragment_timescale;
+static void init_dash_abr(DASHContext* c) {
+    c->video_abr = (ABRContext* )malloc(sizeof(ABRContext));
+    c->audio_abr = (ABRContext* )malloc(sizeof(ABRContext));
+    
+    c->video_abr->max_history_len = 2;
+    c->video_abr->throughput_history = NULL;
+    c->video_abr->buffer_level = 0;
+    c->video_abr->algorithm = SimpleThroughput; //AlwaysFirst;
+    
+    c->audio_abr->max_history_len = 2;
+    c->audio_abr->throughput_history = NULL;
+    c->audio_abr->buffer_level = 0;
+    c->audio_abr->algorithm = SimpleThroughput; //AlwaysFirst;
 
-    int64_t presentation_timeoffset;
-
-    int64_t cur_seq_no;
-    int64_t cur_seg_offset;
-    int64_t cur_seg_size;
-    struct fragment *cur_seg;
-
-    /* Currently active Media Initialization Section */
-    struct fragment *init_section;
-    uint8_t *init_sec_buf;
-    uint32_t init_sec_buf_size;
-    uint32_t init_sec_data_len;
-    uint32_t init_sec_buf_read_offset;
-    int64_t cur_timestamp;
-    int is_restart_needed;
-};
-
-typedef struct DASHContext {
-    const AVClass *class;
-    char *base_url;
-
-    int n_videos;
-    struct representation **videos;
-    int n_audios;
-    struct representation **audios;
-    int n_subtitles;
-    struct representation **subtitles;
-
-    /* MediaPresentationDescription Attribute */
-    uint64_t media_presentation_duration;
-    uint64_t suggested_presentation_delay;
-    uint64_t availability_start_time;
-    uint64_t availability_end_time;
-    uint64_t publish_time;
-    uint64_t minimum_update_period;
-    uint64_t time_shift_buffer_depth;
-    uint64_t min_buffer_time;
-
-    /* Period Attribute */
-    uint64_t period_duration;
-    uint64_t period_start;
-
-    /* AdaptationSet Attribute */
-    char *adaptionset_lang;
-
-    int is_live;
-    AVIOInterruptCB *interrupt_callback;
-    char *allowed_extensions;
-    AVDictionary *avio_opts;
-    int max_url_size;
-
-    /* Flags for init section*/
-    int is_init_section_common_video;
-    int is_init_section_common_audio;
-    int is_init_section_common_subtitle;
-
-} DASHContext;
+    c->dashdec_add_metric = dashdec_add_metric;
+    c->dashdec_get_stream = dashdec_get_stream;
+}
+/////////////////////////////////////
 
 static int ishttp(char *url)
 {
@@ -398,6 +466,7 @@ static void free_subtitle_list(DASHContext *c)
     c->n_subtitles = 0;
 }
 
+// BUPT_COMMENTS: pb stores input buffer when open_url finished.
 static int open_url(AVFormatContext *s, AVIOContext **pb, const char *url,
                     AVDictionary **opts, AVDictionary *opts2, int *is_http)
 {
@@ -416,7 +485,7 @@ static int open_url(AVFormatContext *s, AVIOContext **pb, const char *url,
 
     if (!proto_name)
         return AVERROR_INVALIDDATA;
-
+    
     // only http(s) & file are allowed
     if (av_strstart(proto_name, "file", NULL)) {
         if (strcmp(c->allowed_extensions, "ALL") && !av_match_ext(url, c->allowed_extensions)) {
@@ -441,6 +510,10 @@ static int open_url(AVFormatContext *s, AVIOContext **pb, const char *url,
     av_freep(pb);
     av_dict_copy(&tmp, *opts, 0);
     av_dict_copy(&tmp, opts2, 0);
+    
+    av_log(s, AV_LOG_INFO, "[BUPT DEBUG] url=%s\n", url);
+
+    
     ret = avio_open2(pb, url, AVIO_FLAG_READ, c->interrupt_callback, &tmp);
     if (ret >= 0) {
         // update cookies on http response with setcookies.
@@ -1693,6 +1766,7 @@ static int open_input(DASHContext *c, struct representation *pls, struct fragmen
         goto cleanup;
     }
 
+    // BUPT_COMMENTS: this is where http range request is implemented.
     if (seg->size >= 0) {
         /* try to restrict the HTTP request to the part we want
          * (if this is in fact a HTTP request) */
@@ -2055,6 +2129,10 @@ static int dash_read_header(AVFormatContext *s)
     int ret = 0;
     int stream_index = 0;
     int i;
+    
+    // BUPT
+    init_dash_abr(c);
+    ////////
 
     c->interrupt_callback = &s->interrupt_callback;
 
@@ -2261,6 +2339,8 @@ static int dash_read_packet(AVFormatContext *s, AVPacket *pkt)
 static int dash_close(AVFormatContext *s)
 {
     DASHContext *c = s->priv_data;
+    free(c->video_abr);
+    free(c->audio_abr);
     free_audio_list(c);
     free_video_list(c);
     free_subtitle_list(c);
