@@ -29,6 +29,7 @@
 #include "dash.h"
 #include "dashdec.h"
 #include "abr.h"
+#include "matroskadec.h"
 
 #define INITIAL_BUFFER_SIZE 32768
 #define MAX_BPRINT_READ_SIZE (UINT_MAX - 1)
@@ -225,6 +226,8 @@ static void init_dash_abr(DASHContext* c) {
     c->dashdec_add_metric = dashdec_add_metric;
     c->dashdec_get_stream = dashdec_get_stream;
 }
+
+static int handle_webm_segmentbase(char* url, DASHContext* c, struct representation* rep, xmlNodePtr base);
 /////////////////////////////////////
 
 static int ishttp(char *url)
@@ -511,9 +514,6 @@ static int open_url(AVFormatContext *s, AVIOContext **pb, const char *url,
     av_dict_copy(&tmp, *opts, 0);
     av_dict_copy(&tmp, opts2, 0);
     
-    av_log(s, AV_LOG_INFO, "[BUPT DEBUG] url=%s\n", url);
-
-    
     ret = avio_open2(pb, url, AVIO_FLAG_READ, c->interrupt_callback, &tmp);
     if (ret >= 0) {
         // update cookies on http response with setcookies.
@@ -644,6 +644,20 @@ static enum AVMediaType get_content_type(xmlNodePtr node)
         }
     }
     return type;
+}
+
+static int is_webm(xmlNodePtr node) {
+    char *val = NULL;
+    if (node) {
+        char *val = xmlGetProp(node, "mimeType");
+        if (val) {  return 1;
+            if (av_stristr(val, "webm")) {
+                return 1;
+            }
+        }
+    }
+
+    return 0;
 }
 
 static struct fragment * get_Fragment(char *range)
@@ -910,6 +924,7 @@ static int parse_manifest_representation(AVFormatContext *s, const char *url,
     xmlNodePtr representation_segmenttemplate_node = NULL;
     xmlNodePtr representation_baseurl_node = NULL;
     xmlNodePtr representation_segmentlist_node = NULL;
+    xmlNodePtr representation_segmentbase_node = NULL; //BUPT assume that segmentbase node only appears in rep.
     xmlNodePtr segmentlists_tab[3];
     xmlNodePtr fragment_timeline_node = NULL;
     xmlNodePtr fragment_templates_tab[5];
@@ -947,6 +962,7 @@ static int parse_manifest_representation(AVFormatContext *s, const char *url,
         }
     }
     rep->parent = s;
+    representation_segmentbase_node = find_child_node_by_name(representation_node, "SegmentBase");
     representation_segmenttemplate_node = find_child_node_by_name(representation_node, "SegmentTemplate");
     representation_baseurl_node = find_child_node_by_name(representation_node, "BaseURL");
     representation_segmentlist_node = find_child_node_by_name(representation_node, "SegmentList");
@@ -1056,19 +1072,27 @@ static int parse_manifest_representation(AVFormatContext *s, const char *url,
             }
         }
     } else if (representation_baseurl_node && !representation_segmentlist_node) {
-        seg = av_mallocz(sizeof(struct fragment));
-        if (!seg)
-            goto enomem;
-        ret = av_dynarray_add_nofree(&rep->fragments, &rep->n_fragments, seg);
-        if (ret < 0) {
-            av_free(seg);
-            goto free;
+        int webm_ret = -1;
+        if (is_webm(adaptionset_node) || is_webm(representation_node)) {
+            char* webm_url = get_content_url(baseurl_nodes, 4, c->max_url_size,
+                                             rep->id, rep_bandwidth_val, NULL); 
+            webm_ret = handle_webm_segmentbase(webm_url, c, rep, representation_segmentbase_node);
         }
-        seg->url = get_content_url(baseurl_nodes, 4, c->max_url_size,
-                                   rep->id, rep_bandwidth_val, NULL);
-        if (!seg->url)
-            goto enomem;
-        seg->size = -1;
+        if (webm_ret != 0) {
+            seg = av_mallocz(sizeof(struct fragment));
+            if (!seg)
+                goto enomem;
+            ret = av_dynarray_add_nofree(&rep->fragments, &rep->n_fragments, seg);
+            if (ret < 0) {
+                av_free(seg);
+                goto free;
+            }
+            seg->url = get_content_url(baseurl_nodes, 4, c->max_url_size,
+                                       rep->id, rep_bandwidth_val, NULL);
+            if (!seg->url)
+                goto enomem;
+            seg->size = -1;
+        }
     } else if (representation_segmentlist_node) {
         // TODO: https://www.brendanlong.com/the-structure-of-an-mpeg-dash-mpd.html
         // http://www-itec.uni-klu.ac.at/dash/ddash/mpdGenerator.php?fragmentlength=15&type=full
@@ -1771,14 +1795,17 @@ static int open_input(DASHContext *c, struct representation *pls, struct fragmen
         /* try to restrict the HTTP request to the part we want
          * (if this is in fact a HTTP request) */
         av_dict_set_int(&opts, "offset", seg->url_offset, 0);
-        av_dict_set_int(&opts, "end_offset", seg->url_offset + seg->size, 0);
+        av_dict_set_int(&opts, "end_offset", seg->url_offset + seg->size - 1, 0);
     }
 
     ff_make_absolute_url(url, c->max_url_size, c->base_url, seg->url);
-    av_log(pls->parent, AV_LOG_VERBOSE, "DASH request for url '%s', offset %"PRId64"\n",
-           url, seg->url_offset);
+    av_log(pls->parent, AV_LOG_INFO, "DASH request for url '%s', offset %"PRId64" end %"PRId64"\n",
+           url, seg->url_offset, seg->url_offset + seg->size - 1);
+    if (pls->last_ctx) {
+        pls->ctx->priv_data = pls->last_ctx->priv_data;
+    }
     ret = open_url(pls->parent, &pls->input, url, &c->avio_opts, opts, NULL);
-
+    pls->last_ctx = pls->ctx; 
 cleanup:
     av_free(url);
     av_dict_free(&opts);
@@ -1797,7 +1824,6 @@ static int update_init_section(struct representation *pls)
 
     if (!pls->init_section || pls->init_sec_buf)
         return 0;
-
     ret = open_input(c, pls, pls->init_section);
     if (ret < 0) {
         av_log(pls->parent, AV_LOG_WARNING,
@@ -1860,7 +1886,7 @@ restart:
 
         /* load/update Media Initialization Section, if any */
         ret = update_init_section(v);
-        if (ret)
+        if (ret) 
             goto end;
 
         ret = open_input(c, v, v->cur_seg);
@@ -2033,6 +2059,7 @@ static int open_demux_for_component(AVFormatContext *s, struct representation *p
     if (!pls->last_seq_no) {
         pls->last_seq_no = calc_max_seg_no(pls, s->priv_data);
     }
+    
 
     ret = reopen_demux_for_component(s, pls);
     if (ret < 0) {
@@ -2456,6 +2483,75 @@ static int dash_probe(const AVProbeData *p)
     if (av_stristr(p->buf, "dash:profile")) {
         return AVPROBE_SCORE_MAX;
     }
+
+    return 0;
+}
+
+static int handle_webm_segmentbase(char* url, DASHContext* c, struct representation* rep, xmlNodePtr base) {
+     //return -1;
+    if (!c || !url || !base) return -1;
+    
+    AVDictionary *opts1 = NULL, *opts2 = NULL;
+    AVFormatContext *init = NULL, *cue = NULL;
+    
+    xmlNodePtr init_node = xmlFirstElementChild(base);
+    if (!init_node) return -1;
+
+    struct fragment* init_seg = get_Fragment(xmlGetProp(init_node, "range"));
+    struct fragment* cue_seg = get_Fragment(xmlGetProp(base, "indexRange"));
+
+    // Parse init segment to get SegmentStart
+    init_seg->url = url;
+    av_dict_set_int(&opts1, "offset", init_seg->url_offset, 0);
+    av_dict_set_int(&opts1, "end_offset", init_seg->url_offset + init_seg->size, 0);
+    av_dict_copy(&opts1, c->avio_opts, 0);
+    
+    init = avformat_alloc_context();
+    avio_open2(&init->pb, url, AVIO_FLAG_READ, c->interrupt_callback, &opts1);
+    int segment_start = dashdec_webm_parse_init(init);
+    printf("segment start=%d   \n", segment_start);
+
+    // Parse cue segment to get Cues
+    av_dict_set_int(&opts2, "offset", cue_seg->url_offset, 0);
+    av_dict_set_int(&opts2, "end_offset", cue_seg->url_offset + cue_seg->size, 0);
+    av_dict_copy(&opts2, c->avio_opts, 0);
+    cue = avformat_alloc_context();
+    avio_open2(&cue->pb, url, AVIO_FLAG_READ, c->interrupt_callback, &opts2);
+    CuePosList* next_cue = dashdec_webm_parse_cue(cue);
+    
+    // Transform CuePosList into segment list in representation.
+    if (!next_cue) return -1;
+    CuePosList* cur_cue = next_cue, *cue_head = next_cue;
+    do {
+        next_cue = next_cue->next;
+        if (next_cue) {
+            cur_cue->end = next_cue->begin - 1 + segment_start;
+        } else {
+            cur_cue->end = cue_seg->url_offset - 1; // FIXME: assume cue box is just behind cluster box.
+        }
+        
+        char range_val[50];
+        sprintf(range_val, "%lld-%lld", cur_cue->begin + segment_start, cur_cue->end);
+
+        struct fragment *seg = get_Fragment(range_val);
+        if (!seg) return -1;
+        seg->url = url;
+        int err = av_dynarray_add_nofree(&rep->fragments, &rep->n_fragments, seg);
+        if (err < 0) {
+            free_fragment(&seg);
+            return -1;
+        }
+        cur_cue = next_cue;
+    } while (next_cue);
+    
+    init_seg->size += 1;
+    rep->init_section = init_seg;
+    // av_usleep(1000 * 1000 * 60);
+    // clean up
+    // TODO
+    dashdec_webm_free(cue_head);
+    free(cue_seg);
+    // free(init_seg);
 
     return 0;
 }

@@ -132,9 +132,9 @@ typedef struct PacketQueue {
     SDL_cond *cond;
 } PacketQueue;
 
-#define VIDEO_PICTURE_QUEUE_SIZE 3
-#define SUBPICTURE_QUEUE_SIZE 16
-#define SAMPLE_QUEUE_SIZE 9
+#define VIDEO_PICTURE_QUEUE_SIZE 30
+#define SUBPICTURE_QUEUE_SIZE 160
+#define SAMPLE_QUEUE_SIZE 90
 #define FRAME_QUEUE_SIZE FFMAX(SAMPLE_QUEUE_SIZE, FFMAX(VIDEO_PICTURE_QUEUE_SIZE, SUBPICTURE_QUEUE_SIZE))
 
 typedef struct AudioParams {
@@ -2795,7 +2795,7 @@ static void abr_update(enum AVMediaType type, AVFormatContext* ic, VideoState* i
     int timeout = 0;
     while (http && http->http_req_end == 0) {
         av_usleep(500 * 1000);
-        if ( (av_gettime() - t1) / 1000 > 5000 ) {
+        if ( (av_gettime() - t1) / 1000 > 1000 ) {
             timeout = 1;
             break;
         }
@@ -2817,7 +2817,7 @@ static void abr_update(enum AVMediaType type, AVFormatContext* ic, VideoState* i
         st_index[type] = choosen_idx;
     }
 
-    av_log(ic, AV_LOG_INFO, "DASH Metric(%s): tpt=%f, buffer=%f, choosen=%d, timeout=%d\n",
+    av_log(ic, AV_LOG_WARNING, "DASH Metric(%s): tpt=%f, buffer=%f, choosen=%d, timeout=%d\n",
             type == AVMEDIA_TYPE_VIDEO ? "video" : "audio", tpt, buffer_level, choosen_idx, timeout);
 }
 

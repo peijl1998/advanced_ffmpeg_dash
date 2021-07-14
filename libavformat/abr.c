@@ -42,7 +42,7 @@ static int abr_get_stream_simplethroughput(ABRContext* ac, int* bandwidth, int s
         best_bw = least_bw;
     }
 
-    printf("abr tpt=%f, best_idx=%d, best_bw=%d\n", avg_tpt, best_idx, bandwidth[best_idx]); 
+    // printf("abr tpt=%f, best_idx=%d, best_bw=%d\n", avg_tpt, best_idx, bandwidth[best_idx]); 
     return best_idx;
 }
 

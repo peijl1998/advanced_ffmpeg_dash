@@ -51,6 +51,7 @@ struct representation {
     AVIOContext *input;
     AVFormatContext *parent;
     AVFormatContext *ctx;
+    AVFormatContext *last_ctx;
     int stream_index;
 
     char *id;

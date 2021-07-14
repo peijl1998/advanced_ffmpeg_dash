@@ -55,6 +55,7 @@
 #include "internal.h"
 #include "isom.h"
 #include "matroska.h"
+#include "matroskadec.h"
 #include "oggdec.h"
 /* For ff_codec_get_id(). */
 #include "riff.h"
@@ -80,7 +81,7 @@
 #define UNKNOWN_EQUIV         50 * 1024 /* An unknown element is considered equivalent
                                          * to this many bytes of unknown data for the
                                          * SKIP_THRESHOLD check. */
-
+#define DASHDEC_CHECK(r) if (r<0) goto fail
 typedef enum {
     EBML_NONE,
     EBML_UINT,
@@ -422,7 +423,7 @@ static EbmlSyntax ebml_syntax[3], matroska_segment[9], matroska_track_video_colo
                   matroska_track_combine_planes[2], matroska_track_operation[2], matroska_tracks[2],
                   matroska_attachments[2], matroska_chapter_entry[9], matroska_chapter[6], matroska_chapters[2],
                   matroska_index_entry[3], matroska_index[2], matroska_tag[3], matroska_tags[2], matroska_seekhead[2],
-                  matroska_blockadditions[2], matroska_blockgroup[8], matroska_cluster_parsing[8];
+                  matroska_blockadditions[2], matroska_blockgroup[8], matroska_cluster_parsing[8], matroska_cues[4];
 
 static EbmlSyntax ebml_header[] = {
     { EBML_ID_EBMLREADVERSION,    EBML_UINT, 0, 0, offsetof(Ebml, version),         { .u = EBML_VERSION } },
@@ -729,6 +730,13 @@ static EbmlSyntax matroska_segment[] = {
     { 0 }   /* We don't want to go back to level 0, so don't add the parent. */
 };
 
+static EbmlSyntax matroska_cues[] = {
+    { MATROSKA_ID_CUES,        EBML_LEVEL1, 0, 0, 0, { .n = matroska_index } },
+    { MATROSKA_ID_CUETIME,          EBML_UINT, 0, 0,                        offsetof(MatroskaIndex, time) },
+    { MATROSKA_ID_CUETRACKPOSITION, EBML_NEST, 0, sizeof(MatroskaIndexPos), offsetof(MatroskaIndex, pos), { .n = matroska_index_pos } },
+    { 0 }
+};
+
 static EbmlSyntax matroska_segments[] = {
     { MATROSKA_ID_SEGMENT, EBML_NEST, 0, 0, 0, { .n = matroska_segment } },
     { 0 }
@@ -881,7 +889,6 @@ static int ebml_read_num(MatroskaDemuxContext *matroska, AVIOContext *pb,
 
     /* get the length of the EBML number */
     read = 8 - ff_log2_tab[total];
-
     if (!total || read > max_size) {
         pos = avio_tell(pb) - 1;
         if (!total) {
@@ -906,9 +913,9 @@ static int ebml_read_num(MatroskaDemuxContext *matroska, AVIOContext *pb,
         eof_forbidden = 1;
         goto err;
     }
+    
 
     *number = total;
-
     return read;
 
 err:
@@ -1115,9 +1122,10 @@ static EbmlSyntax *ebml_parse_id(EbmlSyntax *syntax, uint32_t id)
 
     // Whoever touches this should be aware of the duplication
     // existing in matroska_cluster_parsing.
-    for (i = 0; syntax[i].id; i++)
+    for (i = 0; syntax[i].id; i++) {
         if (id == syntax[i].id)
             break;
+    }
 
     return &syntax[i];
 }
@@ -1317,7 +1325,6 @@ static int ebml_parse(MatroskaDemuxContext *matroska,
                 level->length != EBML_UNKNOWN_LENGTH) {
                 uint64_t elem_end = pos_alt + length,
                         level_end = level->start + level->length;
-
                 if (elem_end < level_end) {
                     level_check = 0;
                 } else if (elem_end == level_end) {
@@ -1446,8 +1453,9 @@ static int ebml_parse(MatroskaDemuxContext *matroska,
     case EBML_NEST:
         if ((res = ebml_read_master(matroska, length, pos_alt)) < 0)
             return res;
-        if (id == MATROSKA_ID_SEGMENT)
+        if (id == MATROSKA_ID_SEGMENT) {
             matroska->segment_start = pos_alt;
+        }
         if (id == MATROSKA_ID_CUES)
             matroska->cues_parsing_deferred = 0;
         if (syntax->type == EBML_LEVEL1 &&
@@ -1502,8 +1510,8 @@ static int ebml_parse(MatroskaDemuxContext *matroska,
         else if (res == AVERROR(EIO))
             av_log(matroska->ctx, AV_LOG_ERROR, "Read error\n");
         else if (res == AVERROR_EOF) {
-            av_log(matroska->ctx, AV_LOG_ERROR, "File ended prematurely\n");
-            res = AVERROR(EIO);
+            //av_log(matroska->ctx, AV_LOG_ERROR, "File ended prematurely\n");
+            // res = AVERROR(EIO);  //BUPT FIXME: how to handle this situation?
         }
 
         return res;
@@ -2907,9 +2915,11 @@ static int matroska_read_header(AVFormatContext *s)
     int64_t pos;
     Ebml ebml = { 0 };
     int i, j, res;
-
+    
     matroska->ctx = s;
     matroska->cues_parsing_deferred = 1;
+    
+
 
     /* First read the EBML header. */
     if (ebml_parse(matroska, ebml_syntax, &ebml) || !ebml.doctype) {
@@ -2945,7 +2955,6 @@ static int matroska_read_header(AVFormatContext *s)
     ebml_free(ebml_syntax, &ebml);
 
     matroska->pkt = s->internal->parse_pkt;
-
     /* The next thing is a segment. */
     pos = avio_tell(matroska->ctx->pb);
     res = ebml_parse(matroska, matroska_segments, matroska);
@@ -3039,7 +3048,6 @@ static int matroska_read_header(AVFormatContext *s)
     matroska_add_index_entries(matroska);
 
     matroska_convert_tags(s);
-
     return 0;
 fail:
     matroska_read_close(s);
@@ -3806,6 +3814,8 @@ static int matroska_read_packet(AVFormatContext *s, AVPacket *pkt)
         if (matroska_parse_cluster(matroska) < 0 && !matroska->done)
             ret = matroska_resync(matroska, matroska->resync_pos);
     }
+    
+    // printf("pkt pts=%lld, dts=%lld\n", pkt->pts, pkt->dts);
 
     return 0;
 }
@@ -4288,6 +4298,200 @@ static int webm_dash_manifest_read_packet(AVFormatContext *s, AVPacket *pkt)
 {
     return AVERROR_EOF;
 }
+
+// BUPT
+// TODO: refine the code. it's too ugly and there are errors.
+uint64_t dashdec_webm_parse_init(AVFormatContext* s) {
+    s->priv_data = (MatroskaDemuxContext*)malloc(sizeof(MatroskaDemuxContext)); 
+    MatroskaDemuxContext *matroska = s->priv_data;
+    
+    int64_t start, pos;
+    Ebml ebml = { 0 };
+    int i, res;
+
+    matroska->ctx = s;
+    matroska->cues_parsing_deferred = 1;
+
+    if (ebml_parse(matroska, ebml_syntax, &ebml) || !ebml.doctype) {
+        av_log(matroska->ctx, AV_LOG_ERROR, "EBML header parsing failed\n");
+        ebml_free(ebml_syntax, &ebml);
+        return -1;
+    }
+    if (ebml.version         > EBML_VERSION      ||
+        ebml.max_size        > sizeof(uint64_t)  ||
+        ebml.id_length       > sizeof(uint32_t)  ||
+        ebml.doctype_version > 3) {
+        avpriv_report_missing_feature(matroska->ctx,
+                                      "EBML version %"PRIu64", doctype %s, doc version %"PRIu64,
+                                      ebml.version, ebml.doctype, ebml.doctype_version);
+        ebml_free(ebml_syntax, &ebml);
+        return -1;
+    } else if (ebml.doctype_version == 3) {
+        av_log(matroska->ctx, AV_LOG_WARNING,
+               "EBML header using unsupported features\n"
+               "(EBML version %"PRIu64", doctype %s, doc version %"PRIu64")\n",
+               ebml.version, ebml.doctype, ebml.doctype_version);
+    }
+    for (i = 0; i < FF_ARRAY_ELEMS(matroska_doctypes); i++)
+        if (!strcmp(ebml.doctype, matroska_doctypes[i]))
+            break;
+    if (i >= FF_ARRAY_ELEMS(matroska_doctypes)) {
+        av_log(s, AV_LOG_WARNING, "Unknown EBML doctype '%s'\n", ebml.doctype);
+        if (matroska->ctx->error_recognition & AV_EF_EXPLODE) {
+            ebml_free(ebml_syntax, &ebml);
+            return -1;
+        }
+    }
+    ebml_free(ebml_syntax, &ebml);
+
+    // Try to get segment start
+    pos = avio_tell(matroska->ctx->pb);
+    res = ebml_parse(matroska, matroska_segments, matroska);
+   
+    start = matroska->segment_start;
+    free(matroska);
+
+    return start;
+}
+
+static uint32_t dashdec_webm_parse_id(MatroskaDemuxContext* m,  uint32_t* id) {
+    int res = ebml_read_num(m, m->ctx->pb, 4, id, 0);
+    if (res > 0) {
+        *id = (*id) | 1 << 7 * res;
+    } else {
+        av_log(NULL, AV_LOG_ERROR, "dashdec webm parse id return < 0(%d)\n", res);
+        *id = 0;
+    }
+    return res;
+}
+
+static int dashdec_webm_skip_element(MatroskaDemuxContext* m) {
+    uint64_t length;
+    int res = ebml_read_length(m, m->ctx->pb, &length);
+    if (res < 0) {
+        return -1;
+    }
+    while(length--) {
+        if (m->ctx->pb->eof_reached) {
+            return -1;
+        }
+        avio_r8(m->ctx->pb);
+    }
+    return 1;
+}
+
+CuePosList* dashdec_webm_parse_cue(AVFormatContext* s) {
+    CuePosList* cur_cue = NULL, *cue_head;
+    s->priv_data = (MatroskaDemuxContext*)malloc(sizeof(MatroskaDemuxContext));
+    MatroskaDemuxContext *matroska = s->priv_data;
+    matroska->ctx = s;
+
+
+    int res;
+    uint64_t id, cues_content_length, length, pos_begin;
+
+    
+    // Confirm this is cue box
+    dashdec_webm_parse_id(matroska, &id);
+    if (id != MATROSKA_ID_CUES) {
+        av_log(NULL, AV_LOG_ERROR, "this is not cue segment\n");
+        goto fail;
+    }
+    
+    // Get cue content length
+    res = ebml_read_length(matroska, matroska->ctx->pb, &cues_content_length);
+    if (res < 0) {
+        goto fail;
+    }
+    
+    // start parse cues
+    pos_begin = avio_tell(matroska->ctx->pb);
+    while (avio_tell(matroska->ctx->pb) - pos_begin < cues_content_length) {
+        dashdec_webm_parse_id(matroska, &id);
+        switch (id) {
+            case MATROSKA_ID_CUECLUSTERPOSITION:
+                if (!cur_cue || cur_cue->begin != 0) {
+                    goto fail;
+                }
+                res = ebml_read_length(matroska, matroska->ctx->pb, &length);
+                DASHDEC_CHECK(res);
+                while (length--) {
+                    if (matroska->ctx->pb->eof_reached) {
+                        return -1;
+                    }   
+                    int x = avio_r8(matroska->ctx->pb);
+                    cur_cue->begin <<= 8;
+                    cur_cue->begin |= x;//avio_r8(matroska->ctx->pb);
+                }
+
+                break;
+            case MATROSKA_ID_CUETRACKPOSITION:
+                if (!cur_cue) {
+                    goto fail;
+                } else if (cur_cue->begin != 0) {   // FIXME: currently only support one cue-track
+                    res = dashdec_webm_skip_element(matroska);
+                    DASHDEC_CHECK(res);
+                }
+                res = ebml_read_length(matroska, matroska->ctx->pb, &length);
+                DASHDEC_CHECK(res);
+                break;
+            case MATROSKA_ID_POINTENTRY: 
+                res = ebml_read_length(matroska, matroska->ctx->pb, &length);
+                DASHDEC_CHECK(res);
+                // add a new cue
+                if (!cur_cue) {
+                    cur_cue = (CuePosList*)malloc(sizeof(CuePosList));
+                    cur_cue->next = NULL;
+                    cur_cue->begin = 0;
+                    cue_head = cur_cue;
+                } else {
+                    CuePosList* tmp = (CuePosList*)malloc(sizeof(CuePosList));
+                    tmp->next = NULL;
+                    tmp->begin = 0; // it's impossible that cue->begin == 0 as the result of ebml header.
+                    cur_cue->next = tmp;
+                    cur_cue = tmp;
+                }
+                break;
+            default:
+                if (id == 0) {
+                    av_log(NULL, AV_LOG_ERROR, "id parse fail\n");
+                    goto fail;
+                } else {
+                    res = dashdec_webm_skip_element(matroska);
+                    DASHDEC_CHECK(res);
+                }
+        }
+    }
+
+
+    free(matroska);
+    return cue_head;
+
+fail:
+    free(matroska);
+    while (cue_head) {
+        CuePosList* tmp = cue_head;
+        cue_head = cue_head->next;
+        free(tmp);
+    }
+    av_log(NULL, AV_LOG_ERROR, "dashdec parse cue failed.");
+
+    return NULL;
+}
+
+void dashdec_webm_free(CuePosList* c) {
+    if (!c) return ;
+    CuePosList* first = c;
+    c = c->next;
+    while (c) {
+        free(first);
+        first = c;
+        c = c->next;
+    }
+    if (first) free(first);
+}
+/////////////////////////////////////
+
 
 #define OFFSET(x) offsetof(MatroskaDemuxContext, x)
 static const AVOption options[] = {
