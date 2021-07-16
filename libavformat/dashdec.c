@@ -1072,12 +1072,14 @@ static int parse_manifest_representation(AVFormatContext *s, const char *url,
             }
         }
     } else if (representation_baseurl_node && !representation_segmentlist_node) {
+        // BUPT
         int webm_ret = -1;
         if (is_webm(adaptionset_node) || is_webm(representation_node)) {
             char* webm_url = get_content_url(baseurl_nodes, 4, c->max_url_size,
                                              rep->id, rep_bandwidth_val, NULL); 
             webm_ret = handle_webm_segmentbase(webm_url, c, rep, representation_segmentbase_node);
         }
+        /////////////
         if (webm_ret != 0) {
             seg = av_mallocz(sizeof(struct fragment));
             if (!seg)
@@ -1801,11 +1803,11 @@ static int open_input(DASHContext *c, struct representation *pls, struct fragmen
     ff_make_absolute_url(url, c->max_url_size, c->base_url, seg->url);
     av_log(pls->parent, AV_LOG_INFO, "DASH request for url '%s', offset %"PRId64" end %"PRId64"\n",
            url, seg->url_offset, seg->url_offset + seg->size - 1);
-    if (pls->last_ctx) {
-        pls->ctx->priv_data = pls->last_ctx->priv_data;
-    }
+    // if (pls->last_ctx) {
+    //     pls->ctx->priv_data = pls->last_ctx->priv_data;
+    // }
     ret = open_url(pls->parent, &pls->input, url, &c->avio_opts, opts, NULL);
-    pls->last_ctx = pls->ctx; 
+    // pls->last_ctx = pls->ctx; 
 cleanup:
     av_free(url);
     av_dict_free(&opts);

@@ -14,6 +14,8 @@ typedef struct ABRContext {
     float* throughput_history;
     float buffer_level;
     ABRAlgorithm algorithm;
+
+    // Other parameters needed
 } ABRContext;
 
 void abr_add_metric(ABRContext* ac, float tpt, float buffer_level);

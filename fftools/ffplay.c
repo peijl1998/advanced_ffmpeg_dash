@@ -2817,8 +2817,8 @@ static void abr_update(enum AVMediaType type, AVFormatContext* ic, VideoState* i
         st_index[type] = choosen_idx;
     }
 
-    av_log(ic, AV_LOG_WARNING, "DASH Metric(%s): tpt=%f, buffer=%f, choosen=%d, timeout=%d\n",
-            type == AVMEDIA_TYPE_VIDEO ? "video" : "audio", tpt, buffer_level, choosen_idx, timeout);
+    av_log(ic, AV_LOG_WARNING, "[%lld]DASH Metric(%s): tpt=%f, buffer=%f, choosen=%d, timeout=%d, cur_bandwith=%d\n", av_gettime(),
+            type == AVMEDIA_TYPE_VIDEO ? "video" : "audio", tpt, buffer_level, choosen_idx, timeout, cur_rep->bandwidth);
 }
 
 static int monitor_thread(void* arg) {
