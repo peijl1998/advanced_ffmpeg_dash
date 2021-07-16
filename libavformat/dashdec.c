@@ -35,139 +35,6 @@
 #define MAX_BPRINT_READ_SIZE (UINT_MAX - 1)
 #define DEFAULT_MANIFEST_SIZE 8 * 1024
 
-//   struct fragment {
-//       int64_t url_offset;
-//       int64_t size;
-//       char *url;
-//   };
-//
-//   /*
-//    * reference to : ISO_IEC_23009-1-DASH-2012
-//    * Section: 5.3.9.6.2
-//    * Table: Table 17 — Semantics of SegmentTimeline element
-//    * */
-//   struct timeline {
-//       /* starttime: Element or Attribute Name
-//        * specifies the MPD start time, in @timescale units,
-//        * the first Segment in the series starts relative to the beginning of the Period.
-//        * The value of this attribute must be equal to or greater than the sum of the previous S
-//        * element earliest presentation time and the sum of the contiguous Segment durations.
-//        * If the value of the attribute is greater than what is expressed by the previous S element,
-//        * it expresses discontinuities in the timeline.
-//        * If not present then the value shall be assumed to be zero for the first S element
-//        * and for the subsequent S elements, the value shall be assumed to be the sum of
-//        * the previous S element's earliest presentation time and contiguous duration
-//        * (i.e. previous S@starttime + @duration * (@repeat + 1)).
-//        * */
-//       int64_t starttime;
-//       /* repeat: Element or Attribute Name
-//        * specifies the repeat count of the number of following contiguous Segments with
-//        * the same duration expressed by the value of @duration. This value is zero-based
-//        * (e.g. a value of three means four Segments in the contiguous series).
-//        * */
-//       int64_t repeat;
-//       /* duration: Element or Attribute Name
-//        * specifies the Segment duration, in units of the value of the @timescale.
-//        * */
-//       int64_t duration;
-//   };
-//
-//   /*
-//    * Each playlist has its own demuxer. If it is currently active,
-//    * it has an opened AVIOContext too, and potentially an AVPacket
-//    * containing the next packet from this stream.
-//    */
-//   struct representation {
-//       char *url_template;
-//       AVIOContext pb;
-//       AVIOContext *input;
-//       AVFormatContext *parent;
-//       AVFormatContext *ctx;
-//       int stream_index;
-//
-//       char *id;
-//       char *lang;
-//       int bandwidth;
-//       AVRational framerate;
-//       AVStream *assoc_stream; /* demuxer stream associated with this representation */
-//
-//       int n_fragments;
-//       struct fragment **fragments; /* VOD list of fragment for profile */
-//
-//       int n_timelines;
-//       struct timeline **timelines;
-//
-//       int64_t first_seq_no;
-//       int64_t last_seq_no;
-//       int64_t start_number; /* used in case when we have dynamic list of segment to know which segments are new one*/
-//
-//       int64_t fragment_duration;
-//       int64_t fragment_timescale;
-//
-//       int64_t presentation_timeoffset;
-//
-//       int64_t cur_seq_no;
-//       int64_t cur_seg_offset;
-//       int64_t cur_seg_size;
-//       struct fragment *cur_seg;
-//
-//       /* Currently active Media Initialization Section */
-//       struct fragment *init_section;
-//       uint8_t *init_sec_buf;
-//       uint32_t init_sec_buf_size;
-//       uint32_t init_sec_data_len;
-//       uint32_t init_sec_buf_read_offset;
-//       int64_t cur_timestamp;
-//       int is_restart_needed;
-//   };
-//
-//   typedef struct DASHContext {
-//       const AVClass *class;
-//       char *base_url;
-//
-//       int n_videos;
-//       struct representation **videos;
-//       int n_audios;
-//       struct representation **audios;
-//       int n_subtitles;
-//       struct representation **subtitles;
-//
-//       /* MediaPresentationDescription Attribute */
-//       uint64_t media_presentation_duration;
-//       uint64_t suggested_presentation_delay;
-//       uint64_t availability_start_time;
-//       uint64_t availability_end_time;
-//       uint64_t publish_time;
-//       uint64_t minimum_update_period;
-//       uint64_t time_shift_buffer_depth;
-//       uint64_t min_buffer_time;
-//
-//       /* Period Attribute */
-//       uint64_t period_duration;
-//       uint64_t period_start;
-//
-//       /* AdaptationSet Attribute */
-//       char *adaptionset_lang;
-//
-//       int is_live;
-//       AVIOInterruptCB *interrupt_callback;
-//       char *allowed_extensions;
-//       AVDictionary *avio_opts;
-//       int max_url_size;
-//
-//       /* Flags for init section*/
-//       int is_init_section_common_video;
-//       int is_init_section_common_audio;
-//       int is_init_section_common_subtitle;
-//       
-//       // BUPT
-//       ABRContext* audio_abr;
-//       ABRContext* video_abr;
-//
-//       void (*dashdec_add_metric)(AVFormatContext *s, enum AVMediaType type, float tpt, float buffer_level);
-//       int (*dashdec_get_stream)(AVFormatContext *s, enum AVMediaType type);
-//   } DASHContext;
-
 
 // BUPT
 static void dashdec_add_metric(AVFormatContext* s, enum AVMediaType type, float tpt, float buffer_level) {
@@ -469,7 +336,6 @@ static void free_subtitle_list(DASHContext *c)
     c->n_subtitles = 0;
 }
 
-// BUPT_COMMENTS: pb stores input buffer when open_url finished.
 static int open_url(AVFormatContext *s, AVIOContext **pb, const char *url,
                     AVDictionary **opts, AVDictionary *opts2, int *is_http)
 {
@@ -924,7 +790,7 @@ static int parse_manifest_representation(AVFormatContext *s, const char *url,
     xmlNodePtr representation_segmenttemplate_node = NULL;
     xmlNodePtr representation_baseurl_node = NULL;
     xmlNodePtr representation_segmentlist_node = NULL;
-    xmlNodePtr representation_segmentbase_node = NULL; //BUPT assume that segmentbase node only appears in rep.
+    xmlNodePtr representation_segmentbase_node = NULL; // NOTE: assume that segmentbase node only appears in rep.
     xmlNodePtr segmentlists_tab[3];
     xmlNodePtr fragment_timeline_node = NULL;
     xmlNodePtr fragment_templates_tab[5];
@@ -1792,7 +1658,6 @@ static int open_input(DASHContext *c, struct representation *pls, struct fragmen
         goto cleanup;
     }
 
-    // BUPT_COMMENTS: this is where http range request is implemented.
     if (seg->size >= 0) {
         /* try to restrict the HTTP request to the part we want
          * (if this is in fact a HTTP request) */
@@ -1803,6 +1668,8 @@ static int open_input(DASHContext *c, struct representation *pls, struct fragmen
     ff_make_absolute_url(url, c->max_url_size, c->base_url, seg->url);
     av_log(pls->parent, AV_LOG_INFO, "DASH request for url '%s', offset %"PRId64" end %"PRId64"\n",
            url, seg->url_offset, seg->url_offset + seg->size - 1);
+    
+    // TODO(pjl): check whether the matroska context need to be inherited.
     // if (pls->last_ctx) {
     //     pls->ctx->priv_data = pls->last_ctx->priv_data;
     // }
@@ -2490,7 +2357,6 @@ static int dash_probe(const AVProbeData *p)
 }
 
 static int handle_webm_segmentbase(char* url, DASHContext* c, struct representation* rep, xmlNodePtr base) {
-     //return -1;
     if (!c || !url || !base) return -1;
     
     AVDictionary *opts1 = NULL, *opts2 = NULL;
@@ -2511,7 +2377,7 @@ static int handle_webm_segmentbase(char* url, DASHContext* c, struct representat
     init = avformat_alloc_context();
     avio_open2(&init->pb, url, AVIO_FLAG_READ, c->interrupt_callback, &opts1);
     int segment_start = dashdec_webm_parse_init(init);
-    printf("segment start=%d   \n", segment_start);
+    av_log(c, AV_LOG_DEBUG, "segment start=%d \n", segment_start);
 
     // Parse cue segment to get Cues
     av_dict_set_int(&opts2, "offset", cue_seg->url_offset, 0);
@@ -2529,7 +2395,7 @@ static int handle_webm_segmentbase(char* url, DASHContext* c, struct representat
         if (next_cue) {
             cur_cue->end = next_cue->begin - 1 + segment_start;
         } else {
-            cur_cue->end = cue_seg->url_offset - 1; // FIXME: assume cue box is just behind cluster box.
+            cur_cue->end = cue_seg->url_offset - 1; // TODO(pjl): currently assume cue box is just behind cluster box.
         }
         
         char range_val[50];
@@ -2548,9 +2414,9 @@ static int handle_webm_segmentbase(char* url, DASHContext* c, struct representat
     
     init_seg->size += 1;
     rep->init_section = init_seg;
-    // av_usleep(1000 * 1000 * 60);
+    
     // clean up
-    // TODO
+    // TODO(pjl): check memory leak
     dashdec_webm_free(cue_head);
     free(cue_seg);
     // free(init_seg);

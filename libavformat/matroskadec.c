@@ -1510,8 +1510,8 @@ static int ebml_parse(MatroskaDemuxContext *matroska,
         else if (res == AVERROR(EIO))
             av_log(matroska->ctx, AV_LOG_ERROR, "Read error\n");
         else if (res == AVERROR_EOF) {
-            //av_log(matroska->ctx, AV_LOG_ERROR, "File ended prematurely\n");
-            // res = AVERROR(EIO);  //BUPT FIXME: how to handle this situation?
+            // av_log(matroska->ctx, AV_LOG_ERROR, "File ended prematurely\n");
+            // res = AVERROR(EIO);  //BUPT FIXME(pjl): how to handle this situation?
         }
 
         return res;
@@ -3815,8 +3815,6 @@ static int matroska_read_packet(AVFormatContext *s, AVPacket *pkt)
             ret = matroska_resync(matroska, matroska->resync_pos);
     }
     
-    // printf("pkt pts=%lld, dts=%lld\n", pkt->pts, pkt->dts);
-
     return 0;
 }
 
@@ -4300,8 +4298,10 @@ static int webm_dash_manifest_read_packet(AVFormatContext *s, AVPacket *pkt)
 }
 
 // BUPT
-// TODO: refine the code. it's too ugly and there are errors.
 uint64_t dashdec_webm_parse_init(AVFormatContext* s) {
+    /* TODO(pjl): this function need refactor(just like parse_cue below). 
+                  too ugly and there are some unnecessary errors.*/
+
     s->priv_data = (MatroskaDemuxContext*)malloc(sizeof(MatroskaDemuxContext)); 
     MatroskaDemuxContext *matroska = s->priv_data;
     
@@ -4421,14 +4421,14 @@ CuePosList* dashdec_webm_parse_cue(AVFormatContext* s) {
                     }   
                     int x = avio_r8(matroska->ctx->pb);
                     cur_cue->begin <<= 8;
-                    cur_cue->begin |= x;//avio_r8(matroska->ctx->pb);
+                    cur_cue->begin |= x;
                 }
 
                 break;
             case MATROSKA_ID_CUETRACKPOSITION:
                 if (!cur_cue) {
                     goto fail;
-                } else if (cur_cue->begin != 0) {   // FIXME: currently only support one cue-track
+                } else if (cur_cue->begin != 0) {   // TODO(pjl): currently only support one cue-track
                     res = dashdec_webm_skip_element(matroska);
                     DASHDEC_CHECK(res);
                 }

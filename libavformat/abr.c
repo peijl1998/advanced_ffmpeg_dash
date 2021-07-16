@@ -2,7 +2,7 @@
 #include "stdio.h"
 #include "limits.h"
 
-/* THIS IS NOT THREADING SAFE */
+/* !!! THIS IS MAY NOT THREADING SAFE !!! */
 
 static int abr_get_stream_alwaysfirst(ABRContext* ac, int* bandwidth, int size) {
     return 0;
@@ -46,19 +46,19 @@ static int abr_get_stream_simplethroughput(ABRContext* ac, int* bandwidth, int s
     return best_idx;
 }
 
-// TODO: implement it later.
+// TODO(pjl): implement it later.
 static int abr_get_stream_bba(ABRContext* ac, int* bandwidth, int size) {
     return 0;
 }
 
 void abr_add_metric(ABRContext* ac, float tpt, float buffer_level) {
-    // TODO(pjl): can be optimized by Queue here. implement it later.
-    // NOTE: it's not threading-safe.
     ac->buffer_level = buffer_level;
     
     // from Mbps to bps
     tpt = tpt * 1024 * 1024;
+    
 
+    // TODO(pjl): array can be optimized by queue here. implement it later.
     if (!ac->throughput_history) {
         ac->throughput_history = (float*)malloc(sizeof(float) * ac->max_history_len);
         for (int i = 0; i < ac->max_history_len; ++i) {

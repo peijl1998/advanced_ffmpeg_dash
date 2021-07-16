@@ -2783,7 +2783,7 @@ static void abr_update(enum AVMediaType type, AVFormatContext* ic, VideoState* i
         cur_rep = dc->videos[st_index[type]];
         buffer_level = is->videoq.size;
     } else if (type == AVMEDIA_TYPE_AUDIO) {
-        // TODO: check is it right?
+        // TODO(pjl): check is it right?
         cur_rep = dc->audios[st_index[type] - dc->n_videos];
         buffer_level = is->audioq.size;
     }

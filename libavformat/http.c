@@ -41,100 +41,6 @@
 /* XXX: POST protocol is not completely implemented because ffmpeg uses
  * only a subset of it. */
 
-/* The IO buffer size is unrelated to the max URL size in itself, but needs
- * to be large enough to fit the full request headers (including long
- * path names). */
-//   #define BUFFER_SIZE   (MAX_URL_SIZE + HTTP_HEADERS_SIZE)
-//   #define MAX_REDIRECTS 8
-//   #define HTTP_SINGLE   1
-//   #define HTTP_MUTLI    2
-//   #define MAX_EXPIRY    19
-//   #define WHITESPACES " \n\t\r"
-//   typedef enum {
-//       LOWER_PROTO,
-//       READ_HEADERS,
-//       WRITE_REPLY_HEADERS,
-//       FINISH
-//   }HandshakeState;
-//
-//   typedef struct HTTPContext {
-//       const AVClass *class;
-//       URLContext *hd;
-//       unsigned char buffer[BUFFER_SIZE], *buf_ptr, *buf_end;
-//       int line_count;
-//       int http_code;
-//       /* Used if "Transfer-Encoding: chunked" otherwise -1. */
-//       uint64_t chunksize;
-//       int chunkend;
-//       uint64_t off, end_off, filesize;
-//       char *location;
-//       HTTPAuthState auth_state;
-//       HTTPAuthState proxy_auth_state;
-//       char *http_proxy;
-//       char *headers;
-//       char *mime_type;
-//       char *http_version;
-//       char *user_agent;
-//       char *referer;
-//       char *content_type;
-//       /* Set if the server correctly handles Connection: close and will close
-//        * the connection after feeding us the content. */
-//       int willclose;
-//       int seekable;           /**< Control seekability, 0 = disable, 1 = enable, -1 = probe. */
-//       int chunked_post;
-//       /* A flag which indicates if the end of chunked encoding has been sent. */
-//       int end_chunked_post;
-//       /* A flag which indicates we have finished to read POST reply. */
-//       int end_header;
-//       /* A flag which indicates if we use persistent connections. */
-//       int multiple_requests;
-//       uint8_t *post_data;
-//       int post_datalen;
-//       int is_akamai;
-//       int is_mediagateway;
-//       char *cookies;          ///< holds newline (\n) delimited Set-Cookie header field values (without the "Set-Cookie: " field name)
-//       /* A dictionary containing cookies keyed by cookie name */
-//       AVDictionary *cookie_dict;
-//       int icy;
-//       /* how much data was read since the last ICY metadata packet */
-//       uint64_t icy_data_read;
-//       /* after how many bytes of read data a new metadata packet will be found */
-//       uint64_t icy_metaint;
-//       char *icy_metadata_headers;
-//       char *icy_metadata_packet;
-//       AVDictionary *metadata;
-//   #if CONFIG_ZLIB
-//       int compressed;
-//       z_stream inflate_stream;
-//       uint8_t *inflate_buffer;
-//   #endif /* CONFIG_ZLIB */
-//       AVDictionary *chained_options;
-//       /* -1 = try to send if applicable, 0 = always disabled, 1 = always enabled */
-//       int send_expect_100;
-//       char *method;
-//       int reconnect;
-//       int reconnect_at_eof;
-//       int reconnect_on_network_error;
-//       int reconnect_streamed;
-//       int reconnect_delay_max;
-//       char *reconnect_on_http_error;
-//       int listen;
-//       char *resource;
-//       int reply_code;
-//       int is_multi_client;
-//       HandshakeState handshake_step;
-//       int is_connected_server;
-//       
-//       // BUPT
-//       uint64_t http_req_start;
-//       uint64_t http_req_end;
-//       uint64_t internal_off;
-//       uint64_t internal_read_pos;
-//       uint64_t internal_max_size;
-//       uint8_t* internal_buffer;
-//       int init_off;
-//   } HTTPContext;
-
 #define OFFSET(x) offsetof(HTTPContext, x)
 #define D AV_OPT_FLAG_DECODING_PARAM
 #define E AV_OPT_FLAG_ENCODING_PARAM
@@ -637,6 +543,7 @@ static int http_open(URLContext *h, const char *uri, int flags,
         h->is_streamed = 0;
     else
         h->is_streamed = 1;
+///////////
 
     s->filesize = UINT64_MAX;
     s->location = av_strdup(uri);
@@ -1508,7 +1415,7 @@ static int http_buf_read(URLContext *h, uint8_t *buf, int size)
         if ((!s->willclose || s->chunksize == UINT64_MAX) && s->off >= target_end)
             return AVERROR_EOF;
         
-       
+        // BUPT 
         if (s->http_req_end == 0) {
             long tmp = ffurl_read(s->hd, s->internal_buffer + s->internal_off, s->internal_max_size - s->internal_off);
             if (tmp >= 0) {
@@ -1533,7 +1440,7 @@ static int http_buf_read(URLContext *h, uint8_t *buf, int size)
                 len = 0;
             }
         }
-
+        ///////////////////////////////
        
         // len = ffurl_read(s->hd, buf, size);
     
