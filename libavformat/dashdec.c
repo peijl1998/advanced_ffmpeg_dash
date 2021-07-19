@@ -1154,6 +1154,15 @@ static int parse_programinformation(AVFormatContext *s, xmlNodePtr node)
     return 0;
 }
 
+parse_manifest_period(s, url, node, mpd_baseurl_node);
+xmlNodePtr
+static int parse_manifest_period(AVFormatContext* s,
+                                 const char *url,
+                                 xmlNodePtr period_node,
+                                 xmlNodePtr mpd_base_url_node) {
+    
+}
+
 static int parse_manifest(AVFormatContext *s, const char *url, AVIOContext *in)
 {
     DASHContext *c = s->priv_data;
@@ -1280,6 +1289,7 @@ static int parse_manifest(AVFormatContext *s, const char *url, AVIOContext *in)
         node = xmlFirstElementChild(node);
         while (node) {
             if (!av_strcasecmp(node->name, "Period")) {
+                /*
                 period_duration_sec = 0;
                 period_start_sec = 0;
                 attr = node->properties;
@@ -1300,6 +1310,13 @@ static int parse_manifest(AVFormatContext *s, const char *url, AVIOContext *in)
                     if (c->period_start > 0)
                         c->media_presentation_duration = c->period_duration;
                 }
+                */
+
+                ret = parse_manifest_period(s, url, node, mpd_baseurl_node);
+                if (ret < 0) {
+                    free_period_list(c);
+                    goto cleanup;
+                }
             } else if (!av_strcasecmp(node->name, "ProgramInformation")) {
                 parse_programinformation(s, node);
             }
@@ -1310,7 +1327,8 @@ static int parse_manifest(AVFormatContext *s, const char *url, AVIOContext *in)
             ret = AVERROR_INVALIDDATA;
             goto cleanup;
         }
-
+        
+        /*
         adaptionset_node = xmlFirstElementChild(period_node);
         while (adaptionset_node) {
             if (!av_strcasecmp(adaptionset_node->name, "BaseURL")) {
@@ -1324,6 +1342,7 @@ static int parse_manifest(AVFormatContext *s, const char *url, AVIOContext *in)
             }
             adaptionset_node = xmlNextElementSibling(adaptionset_node);
         }
+        */
 cleanup:
         /*free the document */
         xmlFreeDoc(doc);
@@ -2240,6 +2259,8 @@ static int dash_close(AVFormatContext *s)
     free_audio_list(c);
     free_video_list(c);
     free_subtitle_list(c);
+    // TODO(pjl): implement it later
+    // free_period_list(c);
     av_dict_free(&c->avio_opts);
     av_freep(&c->base_url);
     return 0;

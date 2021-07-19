@@ -90,16 +90,34 @@ struct representation {
     int is_restart_needed;
 };
 
-typedef struct DASHContext {
-    const AVClass *class;
-    char *base_url;
-
+typedef struct Period {
     int n_videos;
     struct representation **videos;
     int n_audios;
     struct representation **audios;
     int n_subtitles;
     struct representation **subtitles;
+
+    uint64_t period_duration;
+    uint64_t period_start;
+
+    char *adaptionset_lang;
+
+    int is_init_section_common_video;
+    int is_init_section_common_audio;
+    int is_init_section_common_subtitle;
+} Period;
+
+typedef struct DASHContext {
+    const AVClass *class;
+    char *base_url;
+
+    // int n_videos;
+    // struct representation **videos;
+    // int n_audios;
+    // struct representation **audios;
+    // int n_subtitles;
+    // struct representation **subtitles;
 
     /* MediaPresentationDescription Attribute */
     uint64_t media_presentation_duration;
@@ -112,11 +130,11 @@ typedef struct DASHContext {
     uint64_t min_buffer_time;
 
     /* Period Attribute */
-    uint64_t period_duration;
-    uint64_t period_start;
+    // uint64_t period_duration;
+    // uint64_t period_start;
 
     /* AdaptationSet Attribute */
-    char *adaptionset_lang;
+    // char *adaptionset_lang;
 
     int is_live;
     AVIOInterruptCB *interrupt_callback;
@@ -125,11 +143,15 @@ typedef struct DASHContext {
     int max_url_size;
 
     /* Flags for init section*/
-    int is_init_section_common_video;
-    int is_init_section_common_audio;
-    int is_init_section_common_subtitle;
+    // int is_init_section_common_video;
+    // int is_init_section_common_audio;
+    // int is_init_section_common_subtitle;
 
     // BUPT
+    int n_periods;
+    int current_period;
+    struct Period **periods;
+    
     ABRContext* audio_abr;
     ABRContext* video_abr;
 
