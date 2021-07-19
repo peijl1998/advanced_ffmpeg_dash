@@ -1203,6 +1203,8 @@ static int parse_manifest_period(AVFormatContext* s,
     xmlNodePtr period_segmentlist_node = NULL;
 
     Period* pd = av_mallocz(sizeof(Period)); 
+    pd->period_duration = -1;
+    pd->period_start = -1;
 
     // parse period attrs
     attr = period_node->properties;
@@ -1514,7 +1516,11 @@ static int64_t calc_max_seg_no(struct representation *pls, DASHContext *c)
     } else if (c->is_live && pls->fragment_duration) {
         num = pls->first_seq_no + (((get_current_time_in_sec() - c->availability_start_time)) * pls->fragment_timescale)  / pls->fragment_duration;
     } else if (pls->fragment_duration) {
-        num = pls->first_seq_no + av_rescale_rnd(1, c->media_presentation_duration * pls->fragment_timescale, pls->fragment_duration, AV_ROUND_UP);
+        if (c->periods[c->current_periods]->period_duration > 0) {
+            num = pls->first_seq_no + av_rescale_rnd(1, c->media_presentation_duration * pls->fragment_timescale, pls->fragment_duration, AV_ROUND_UP);
+        } else {
+            num = pls->first_seq_no + av_rescale_rnd(1, c->media_presentation_duration * pls->fragment_timescale, pls->fragment_duration, AV_ROUND_UP);
+        }
     }
     
     printf("---------------------------------- max_seg=%d ----------------------------\n", num);
@@ -1680,8 +1686,6 @@ static struct fragment *get_current_fragment(struct representation *pls)
             seg->size = seg_ptr->size;
             seg->url_offset = seg_ptr->url_offset;
             return seg;
-        } else if (c->current_period < c->n_periods - 1) {
-          c->current_period++;  
         } else if (c->is_live) {
             refresh_manifest(pls->parent);
         } else {
@@ -2129,34 +2133,14 @@ static void move_metadata(AVStream *st, const char *key, char **value)
     }
 }
 
-static int dash_read_header(AVFormatContext *s)
-{
-    DASHContext *c = s->priv_data;
-    struct representation *rep;
-    AVProgram *program;
-    int ret = 0;
+static void open_streams(AVFormatContext* s) {
+    DASHContext* c = s->priv_data;
     int stream_index = 0;
+    int ret = 0;
+    AVProgram *program;
+    struct representation* rep;
     int i;
-    
-    // BUPT
-    init_dash_abr(c);
-    ////////
 
-    c->interrupt_callback = &s->interrupt_callback;
-
-    if ((ret = save_avio_options(s)) < 0)
-        goto fail;
-
-    if ((ret = parse_manifest(s, s->url, s->pb)) < 0)
-        goto fail;
-
-    /* If this isn't a live stream, fill the total duration of the
-     * stream. */
-    if (!c->is_live) {
-        s->duration = (int64_t) c->media_presentation_duration * AV_TIME_BASE;
-    } else {
-        av_dict_set(&c->avio_opts, "seekable", "0", 0);
-    }
 
     if(c->periods[c->current_period]->n_videos)
         c->periods[c->current_period]->is_init_section_common_video = is_common_init_section_exist(c->periods[c->current_period]->videos,
@@ -2167,25 +2151,6 @@ static int dash_read_header(AVFormatContext *s)
         rep = c->periods[c->current_period]->videos[i];
         if (i > 0 && c->periods[c->current_period]->is_init_section_common_video) {
             ret = copy_init_section(rep, c->periods[c->current_period]->videos[0]);
-            if (ret < 0)
-                goto fail;
-        }
-        ret = open_demux_for_component(s, rep);
-
-        if (ret)
-            goto fail;
-        rep->stream_index = stream_index;
-        ++stream_index;
-    }
-
-    if(c->periods[c->current_period]->n_audios)
-        c->periods[c->current_period]->is_init_section_common_audio = is_common_init_section_exist(c->periods[c->current_period]->audios,
-                                                                                                   c->periods[c->current_period]->n_audios);
-
-    for (i = 0; i < c->periods[c->current_period]->n_audios; i++) {
-        rep = c->periods[c->current_period]->audios[i];
-        if (i > 0 && c->periods[c->current_period]->is_init_section_common_audio) {
-            ret = copy_init_section(rep, c->periods[c->current_period]->audios[0]);
             if (ret < 0)
                 goto fail;
         }
@@ -2252,6 +2217,138 @@ static int dash_read_header(AVFormatContext *s)
         move_metadata(rep->assoc_stream, "id", &rep->id);
         move_metadata(rep->assoc_stream, "language", &rep->lang);
     }
+
+    return ret;
+fail:
+    dash_close(s);
+    return ret;
+}
+
+static int dash_read_header(AVFormatContext *s)
+{
+    DASHContext *c = s->priv_data;
+    // struct representation *rep;
+    // AVProgram *program;
+    int ret = 0;
+    // int stream_index = 0;
+    // int i;
+    
+    // BUPT
+    init_dash_abr(c);
+    ////////
+
+    c->interrupt_callback = &s->interrupt_callback;
+
+    if ((ret = save_avio_options(s)) < 0)
+        goto fail;
+
+    if ((ret = parse_manifest(s, s->url, s->pb)) < 0)
+        goto fail;
+
+    /* If this isn't a live stream, fill the total duration of the
+     * stream. */
+    if (!c->is_live) {
+        s->duration = (int64_t) c->media_presentation_duration * AV_TIME_BASE;
+    } else {
+        av_dict_set(&c->avio_opts, "seekable", "0", 0);
+    }
+
+    if(c->periods[c->current_period]->n_videos)
+        c->periods[c->current_period]->is_init_section_common_video = is_common_init_section_exist(c->periods[c->current_period]->videos,
+                                                                                           c->periods[c->current_period]->n_videos);
+    if ((ret = open_streams(s)) < 0) {
+        goto fail;
+    }
+    /* Open the demuxer for video and audio components if available */
+    // for (i = 0; i < c->periods[c->current_period]->n_videos; i++) {
+    //     rep = c->periods[c->current_period]->videos[i];
+    //     if (i > 0 && c->periods[c->current_period]->is_init_section_common_video) {
+    //         ret = copy_init_section(rep, c->periods[c->current_period]->videos[0]);
+    //         if (ret < 0)
+    //             goto fail;
+    //     }
+    //     ret = open_demux_for_component(s, rep);
+
+    //     if (ret)
+    //         goto fail;
+    //     rep->stream_index = stream_index;
+    //     ++stream_index;
+    // }
+
+    // if(c->periods[c->current_period]->n_audios)
+    //     c->periods[c->current_period]->is_init_section_common_audio = is_common_init_section_exist(c->periods[c->current_period]->audios,
+    //                                                                                                c->periods[c->current_period]->n_audios);
+
+    // for (i = 0; i < c->periods[c->current_period]->n_audios; i++) {
+    //     rep = c->periods[c->current_period]->audios[i];
+    //     if (i > 0 && c->periods[c->current_period]->is_init_section_common_audio) {
+    //         ret = copy_init_section(rep, c->periods[c->current_period]->audios[0]);
+    //         if (ret < 0)
+    //             goto fail;
+    //     }
+    //     ret = open_demux_for_component(s, rep);
+
+    //     if (ret)
+    //         goto fail;
+    //     rep->stream_index = stream_index;
+    //     ++stream_index;
+    // }
+
+    // if (c->periods[c->current_period]->n_subtitles)
+    //     c->periods[c->current_period]->is_init_section_common_subtitle = is_common_init_section_exist(c->periods[c->current_period]->subtitles,
+    //                                                                                                   c->periods[c->current_period]->n_subtitles);
+
+    // for (i = 0; i < c->periods[c->current_period]->n_subtitles; i++) {
+    //     rep = c->periods[c->current_period]->subtitles[i];
+    //     if (i > 0 && c->periods[c->current_period]->is_init_section_common_subtitle) {
+    //         ret = copy_init_section(rep, c->periods[c->current_period]->subtitles[0]);
+    //         if (ret < 0)
+    //             goto fail;
+    //     }
+    //     ret = open_demux_for_component(s, rep);
+
+    //     if (ret)
+    //         goto fail;
+    //     rep->stream_index = stream_index;
+    //     ++stream_index;
+    // }
+
+    // if (!stream_index) {
+    //     ret = AVERROR_INVALIDDATA;
+    //     goto fail;
+    // }
+
+    // /* Create a program */
+    // program = av_new_program(s, 0);
+    // if (!program) {
+    //     ret = AVERROR(ENOMEM);
+    //     goto fail;
+    // }
+
+    // for (i = 0; i < c->periods[c->current_period]->n_videos; i++) {
+    //     rep = c->periods[c->current_period]->videos[i];
+    //     av_program_add_stream_index(s, 0, rep->stream_index);
+    //     rep->assoc_stream = s->streams[rep->stream_index];
+    //     if (rep->bandwidth > 0)
+    //         av_dict_set_int(&rep->assoc_stream->metadata, "variant_bitrate", rep->bandwidth, 0);
+    //     move_metadata(rep->assoc_stream, "id", &rep->id);
+    // }
+    // for (i = 0; i < c->periods[c->current_period]->n_audios; i++) {
+    //     rep = c->periods[c->current_period]->audios[i];
+    //     av_program_add_stream_index(s, 0, rep->stream_index);
+    //     rep->assoc_stream = s->streams[rep->stream_index];
+    //     if (rep->bandwidth > 0)
+    //         av_dict_set_int(&rep->assoc_stream->metadata, "variant_bitrate", rep->bandwidth, 0);
+    //     move_metadata(rep->assoc_stream, "id", &rep->id);
+    //     move_metadata(rep->assoc_stream, "language", &rep->lang);
+    // }
+    // for (i = 0; i < c->periods[c->current_period]->n_subtitles; i++) {
+    //     rep = c->periods[c->current_period]->subtitles[i];
+    //     av_program_add_stream_index(s, 0, rep->stream_index);
+    //     rep->assoc_stream = s->streams[rep->stream_index];
+    //     move_metadata(rep->assoc_stream, "id", &rep->id);
+    //     move_metadata(rep->assoc_stream, "language", &rep->lang);
+    // }
 
     return 0;
 fail:
@@ -2328,6 +2425,41 @@ static int dash_read_packet(AVFormatContext *s, AVPacket *pkt)
     if (!cur) {
         return AVERROR_INVALIDDATA;
     }
+
+    // multi-period support
+    if (cur->cur_seq_no >= cur->n_fragments) {
+        if (c->current_period < c->n_periods) {
+            for (i = 0; i < c->periods[c->current_period]->n_videos; ++i) {
+                close_demux_for_component(c->periods[c->current_period]->videos[i]);
+                c->periods[c->current_period + 1]->videos[i]->cur_timestamp = cur->cur_timestamp;
+            }
+            for (i = 0; i < c->periods[c->current_period]->n_audios; ++i) {
+                close_demux_for_component(c->periods[c->current_period]->audios[i]);
+                c->periods[c->current_period + 1]->audios[i]->cur_timestamp = cur->cur_timestamp;
+            }
+            for (i = 0; i < c->periods[c->current_period]->n_subtitles; ++i) {
+                close_demux_for_component(c->periods[c->current_period]->subtitles[i]);
+                c->periods[c->current_period + 1]->subtitles[i]->cur_timestamp = cur->cur_timestamp;
+            }
+            c->current_period++;
+            open_streams(s); // NOTE: upper layers' stream state maybe updated.
+            cur = NULL;
+
+            if (c->periods[c->current_period]->n_videos > 0) {
+                cur = c->periods[c->current_period]->videos[0];
+            } else if (c->periods[c->current_period]->n_audios > 0) {
+                cur = c->periods[c->current_period]->audios[0];
+            } else if (c->periods[c->current_period]->n_subtitles > 0) {
+                cur = c->periods[c->current_period]->subtitles[0];
+            }
+
+            if (!cur) {
+                return AVERROR_INVALIDDATA;
+            }
+        }
+    }
+
+
     while (!ff_check_interrupt(c->interrupt_callback) && !ret) {
         ret = av_read_frame(cur->ctx, pkt);
         if (ret >= 0) {
