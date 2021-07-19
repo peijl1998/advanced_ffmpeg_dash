@@ -97,7 +97,7 @@ typedef struct Period {
     struct representation **audios;
     int n_subtitles;
     struct representation **subtitles;
-
+    
     uint64_t period_duration;
     uint64_t period_start;
 
