@@ -133,7 +133,8 @@ typedef struct DASHContext {
     ABRContext* audio_abr;
     ABRContext* video_abr;
 
-    void (*dashdec_add_metric)(AVFormatContext *s, enum AVMediaType type, float tpt, float buffer_level);
+    void (*dashdec_add_metric)(AVFormatContext *s, enum AVMediaType type, float tpt, float buffer_level,
+                               int buffer_max, int buffer_r, int buffer_c);
     int (*dashdec_get_stream)(AVFormatContext *s, enum AVMediaType type);
 } DASHContext;
 

@@ -2775,7 +2775,10 @@ static void abr_update(enum AVMediaType type, AVFormatContext* ic, VideoState* i
     URLContext* url = NULL;
     HTTPContext* http = NULL;
     float tpt = -1, buffer_level = -1;
-    int choosen_idx = -1;
+    int choosen_idx = -1, timeout;
+    uint64_t t1;
+    // not support yet, just for test. (simpletpt rule doesn't need it)
+    int buffer_max = 240, buffer_r = 90, buffer_c = 126;
     
     if (!dc) av_log(is, AV_LOG_ERROR, "dash context is null\n");
     // NOTE: assume stream_index is sorted by VIDEO/AUDIO/SUBTITLE
@@ -2791,8 +2794,8 @@ static void abr_update(enum AVMediaType type, AVFormatContext* ic, VideoState* i
     url = cur_rep->input->opaque;
     http = url->priv_data; 
     
-    uint64_t t1 = av_gettime();
-    int timeout = 0;
+    t1 = av_gettime();
+    timeout = 0;
     while (http && http->http_req_end == 0) {
         av_usleep(500 * 1000);
         if ( (av_gettime() - t1) / 1000 > 1000 ) {
@@ -2808,7 +2811,10 @@ static void abr_update(enum AVMediaType type, AVFormatContext* ic, VideoState* i
         return ;
     }
     
-    dc->dashdec_add_metric(ic, type, tpt, buffer_level);
+    // just for test bba-0
+    buffer_level = 150;
+    dc->dashdec_add_metric(ic, type, tpt, buffer_level, 
+                           buffer_max, buffer_r, buffer_c);
     
     choosen_idx = dc->dashdec_get_stream(ic, type);
     if (choosen_idx >= 0 && choosen_idx != st_index[type]) {
