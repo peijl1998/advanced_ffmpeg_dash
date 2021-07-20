@@ -94,6 +94,13 @@ static void init_dash_abr(DASHContext* c) {
     c->dashdec_get_stream = dashdec_get_stream;
 }
 
+static void copy_metadata(AVStream *st, const char *key, char **value)
+{
+    if (*value) {
+        av_dict_set(&st->metadata, key, *value, AV_DICT_DONT_STRDUP_VAL);
+    }
+}
+
 static int handle_webm_segmentbase(char* url, DASHContext* c, struct representation* rep, xmlNodePtr base);
 /////////////////////////////////////
 
@@ -541,11 +548,11 @@ static enum AVMediaType get_content_type(xmlNodePtr node)
     }
     return type;
 }
-
+ 
 static int is_webm(xmlNodePtr node) {
     char *val = NULL;
     if (node) {
-        char *val = xmlGetProp(node, "mimeType");
+        val = xmlGetProp(node, "mimeType");
         if (val) {  return 1;
             if (av_stristr(val, "webm")) {
                 return 1;
@@ -1260,17 +1267,17 @@ static int parse_manifest(AVFormatContext *s, const char *url, AVIOContext *in)
     xmlDoc *doc = NULL;
     xmlNodePtr root_element = NULL;
     xmlNodePtr node = NULL;
-    xmlNodePtr period_node = NULL;
+    // xmlNodePtr period_node = NULL;
     xmlNodePtr tmp_node = NULL;
     xmlNodePtr mpd_baseurl_node = NULL;
-    xmlNodePtr period_baseurl_node = NULL;
-    xmlNodePtr period_segmenttemplate_node = NULL;
-    xmlNodePtr period_segmentlist_node = NULL;
-    xmlNodePtr adaptionset_node = NULL;
+    // xmlNodePtr period_baseurl_node = NULL;
+    // xmlNodePtr period_segmenttemplate_node = NULL;
+    // xmlNodePtr period_segmentlist_node = NULL;
+    // xmlNodePtr adaptionset_node = NULL;
     xmlAttrPtr attr = NULL;
     char *val  = NULL;
-    uint32_t period_duration_sec = 0;
-    uint32_t period_start_sec = 0;
+    // uint32_t period_duration_sec = 0;
+    // uint32_t period_start_sec = 0;
 
     if (!in) {
         close_in = 1;
@@ -1522,10 +1529,9 @@ static int64_t calc_max_seg_no(struct representation *pls, DASHContext *c)
             num = pls->first_seq_no + av_rescale_rnd(1, c->media_presentation_duration * pls->fragment_timescale, pls->fragment_duration, AV_ROUND_UP);
         }
     }
-    
     return num;
 }
-
+/*
 static void move_timelines(struct representation *rep_src, struct representation *rep_dest, DASHContext *c)
 {
     if (rep_dest && rep_src ) {
@@ -1556,7 +1562,7 @@ static void move_segments(struct representation *rep_src, struct representation 
         rep_src->n_fragments = 0;
     }
 }
-
+*/
 // TODO(pjl): live profiles + multi period need reconsider.
 static int refresh_manifest(AVFormatContext* s) {
     return 0;
@@ -1967,7 +1973,7 @@ static int reopen_demux_for_component(AVFormatContext *s, struct representation 
     AVDictionary  *in_fmt_opts = NULL;
     uint8_t *avio_ctx_buffer  = NULL;
     int ret = 0, i;
-
+    
     if (pls->ctx) {
         close_demux_for_component(pls);
     }
@@ -2124,6 +2130,7 @@ static int copy_init_section(struct representation *rep_dest, struct representat
 
 static int dash_close(AVFormatContext *s);
 
+/*
 static void move_metadata(AVStream *st, const char *key, char **value)
 {
     if (*value) {
@@ -2131,6 +2138,7 @@ static void move_metadata(AVStream *st, const char *key, char **value)
         *value = NULL;
     }
 }
+*/
 
 static int open_streams(AVFormatContext* s) {
     DASHContext* c = s->priv_data;
@@ -2141,15 +2149,33 @@ static int open_streams(AVFormatContext* s) {
     int i;
 
 
+    /* Open the demuxer for video and audio components if available */
     if(c->periods[c->current_period]->n_videos)
         c->periods[c->current_period]->is_init_section_common_video = is_common_init_section_exist(c->periods[c->current_period]->videos,
                                                                                            c->periods[c->current_period]->n_videos);
 
-    /* Open the demuxer for video and audio components if available */
     for (i = 0; i < c->periods[c->current_period]->n_videos; i++) {
         rep = c->periods[c->current_period]->videos[i];
         if (i > 0 && c->periods[c->current_period]->is_init_section_common_video) {
             ret = copy_init_section(rep, c->periods[c->current_period]->videos[0]);
+            if (ret < 0)
+                goto fail;
+        }
+        ret = open_demux_for_component(s, rep);
+        if (ret)
+            goto fail;
+        rep->stream_index = stream_index;
+        ++stream_index;
+    }
+
+    if(c->periods[c->current_period]->n_audios)
+        c->periods[c->current_period]->is_init_section_common_audio = is_common_init_section_exist(c->periods[c->current_period]->audios,
+                                                                                                   c->periods[c->current_period]->n_audios);
+
+    for (i = 0; i < c->periods[c->current_period]->n_audios; i++) {
+        rep = c->periods[c->current_period]->audios[i];
+        if (i > 0 && c->periods[c->current_period]->is_init_section_common_audio) {
+            ret = copy_init_section(rep, c->periods[c->current_period]->audios[0]);
             if (ret < 0)
                 goto fail;
         }
@@ -2198,7 +2224,8 @@ static int open_streams(AVFormatContext* s) {
         rep->assoc_stream = s->streams[rep->stream_index];
         if (rep->bandwidth > 0)
             av_dict_set_int(&rep->assoc_stream->metadata, "variant_bitrate", rep->bandwidth, 0);
-        move_metadata(rep->assoc_stream, "id", &rep->id);
+        // move_metadata(rep->assoc_stream, "id", &rep->id);
+        copy_metadata(rep->assoc_stream, "id", &rep->id);
     }
     for (i = 0; i < c->periods[c->current_period]->n_audios; i++) {
         rep = c->periods[c->current_period]->audios[i];
@@ -2206,15 +2233,19 @@ static int open_streams(AVFormatContext* s) {
         rep->assoc_stream = s->streams[rep->stream_index];
         if (rep->bandwidth > 0)
             av_dict_set_int(&rep->assoc_stream->metadata, "variant_bitrate", rep->bandwidth, 0);
-        move_metadata(rep->assoc_stream, "id", &rep->id);
-        move_metadata(rep->assoc_stream, "language", &rep->lang);
+        // move_metadata(rep->assoc_stream, "id", &rep->id);
+        // move_metadata(rep->assoc_stream, "language", &rep->lang);
+        copy_metadata(rep->assoc_stream, "id", &rep->id);
+        copy_metadata(rep->assoc_stream, "language", &rep->lang);
     }
     for (i = 0; i < c->periods[c->current_period]->n_subtitles; i++) {
         rep = c->periods[c->current_period]->subtitles[i];
         av_program_add_stream_index(s, 0, rep->stream_index);
         rep->assoc_stream = s->streams[rep->stream_index];
-        move_metadata(rep->assoc_stream, "id", &rep->id);
-        move_metadata(rep->assoc_stream, "language", &rep->lang);
+        // move_metadata(rep->assoc_stream, "id", &rep->id);
+        // move_metadata(rep->assoc_stream, "language", &rep->lang);
+        copy_metadata(rep->assoc_stream, "id", &rep->id);
+        copy_metadata(rep->assoc_stream, "language", &rep->lang);
     }
 
     return ret;
@@ -2426,21 +2457,18 @@ static int dash_read_packet(AVFormatContext *s, AVPacket *pkt)
     }
 
     // multi-period support
-    if (cur->cur_seq_no >= cur->n_fragments) {
-        if (c->current_period < c->n_periods) {
+    if (cur->cur_seq_no >= cur->last_seq_no) {
+        if (c->current_period < c->n_periods - 1) { 
+            c->current_period++;
             for (i = 0; i < c->periods[c->current_period]->n_videos; ++i) {
-                close_demux_for_component(c->periods[c->current_period]->videos[i]);
-                c->periods[c->current_period + 1]->videos[i]->cur_timestamp = cur->cur_timestamp;
+                c->periods[c->current_period]->videos[i]->cur_timestamp = cur->cur_timestamp;
             }
             for (i = 0; i < c->periods[c->current_period]->n_audios; ++i) {
-                close_demux_for_component(c->periods[c->current_period]->audios[i]);
-                c->periods[c->current_period + 1]->audios[i]->cur_timestamp = cur->cur_timestamp;
+                c->periods[c->current_period]->audios[i]->cur_timestamp = cur->cur_timestamp;
             }
             for (i = 0; i < c->periods[c->current_period]->n_subtitles; ++i) {
-                close_demux_for_component(c->periods[c->current_period]->subtitles[i]);
-                c->periods[c->current_period + 1]->subtitles[i]->cur_timestamp = cur->cur_timestamp;
+                c->periods[c->current_period]->subtitles[i]->cur_timestamp = cur->cur_timestamp;
             }
-            c->current_period++;
             open_streams(s); // NOTE: upper layers' stream state maybe updated.
             cur = NULL;
 
@@ -2451,7 +2479,7 @@ static int dash_read_packet(AVFormatContext *s, AVPacket *pkt)
             } else if (c->periods[c->current_period]->n_subtitles > 0) {
                 cur = c->periods[c->current_period]->subtitles[0];
             }
-
+            
             if (!cur) {
                 return AVERROR_INVALIDDATA;
             }
@@ -2608,16 +2636,21 @@ static int dash_probe(const AVProbeData *p)
 }
 
 static int handle_webm_segmentbase(char* url, DASHContext* c, struct representation* rep, xmlNodePtr base) {
-    if (!c || !url || !base) return -1;
-    
     AVDictionary *opts1 = NULL, *opts2 = NULL;
     AVFormatContext *init = NULL, *cue = NULL;
+    xmlNodePtr init_node = NULL;
+    struct fragment* init_seg = NULL, *cue_seg = NULL, *seg;
+    int segment_start = -1, err;
+    char* range_val = NULL;
+    CuePosList* next_cue = NULL, *cur_cue = NULL, *cue_head = NULL;
+
+    if (!c || !url || !base) return -1;
     
-    xmlNodePtr init_node = xmlFirstElementChild(base);
+    init_node = xmlFirstElementChild(base);
     if (!init_node) return -1;
 
-    struct fragment* init_seg = get_Fragment(xmlGetProp(init_node, "range"));
-    struct fragment* cue_seg = get_Fragment(xmlGetProp(base, "indexRange"));
+    init_seg = get_Fragment(xmlGetProp(init_node, "range"));
+    cue_seg = get_Fragment(xmlGetProp(base, "indexRange"));
 
     // Parse init segment to get SegmentStart
     init_seg->url = url;
@@ -2627,7 +2660,7 @@ static int handle_webm_segmentbase(char* url, DASHContext* c, struct representat
     
     init = avformat_alloc_context();
     avio_open2(&init->pb, url, AVIO_FLAG_READ, c->interrupt_callback, &opts1);
-    int segment_start = dashdec_webm_parse_init(init);
+    segment_start = dashdec_webm_parse_init(init);
     av_log(c, AV_LOG_DEBUG, "segment start=%d \n", segment_start);
 
     // Parse cue segment to get Cues
@@ -2636,11 +2669,12 @@ static int handle_webm_segmentbase(char* url, DASHContext* c, struct representat
     av_dict_copy(&opts2, c->avio_opts, 0);
     cue = avformat_alloc_context();
     avio_open2(&cue->pb, url, AVIO_FLAG_READ, c->interrupt_callback, &opts2);
-    CuePosList* next_cue = dashdec_webm_parse_cue(cue);
+    next_cue = dashdec_webm_parse_cue(cue);
     
     // Transform CuePosList into segment list in representation.
     if (!next_cue) return -1;
-    CuePosList* cur_cue = next_cue, *cue_head = next_cue;
+    cur_cue = next_cue;
+    cue_head = next_cue;
     do {
         next_cue = next_cue->next;
         if (next_cue) {
@@ -2649,13 +2683,12 @@ static int handle_webm_segmentbase(char* url, DASHContext* c, struct representat
             cur_cue->end = cue_seg->url_offset - 1; // TODO(pjl): currently assume cue box is just behind cluster box.
         }
         
-        char range_val[50];
-        sprintf(range_val, "%lld-%lld", cur_cue->begin + segment_start, cur_cue->end);
+        sprintf(range_val, "%lu-%lu", cur_cue->begin + segment_start, cur_cue->end);
 
-        struct fragment *seg = get_Fragment(range_val);
+        seg = get_Fragment(range_val);
         if (!seg) return -1;
         seg->url = url;
-        int err = av_dynarray_add_nofree(&rep->fragments, &rep->n_fragments, seg);
+        err = av_dynarray_add_nofree(&rep->fragments, &rep->n_fragments, seg);
         if (err < 0) {
             free_fragment(&seg);
             return -1;
