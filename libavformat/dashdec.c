@@ -37,14 +37,18 @@
 
 
 // BUPT
-static void dashdec_add_metric(AVFormatContext* s, enum AVMediaType type, float tpt, float buffer_level) {
+static void dashdec_add_metric(AVFormatContext* s, enum AVMediaType type, float tpt, 
+                               float buffer_level, int buffer_max, int buffer_r, int buffer_c) {
     DASHContext* c = s->priv_data;
     if (type != AVMEDIA_TYPE_VIDEO && type != AVMEDIA_TYPE_AUDIO) {
         av_log(c, AV_LOG_ERROR, "mediatype not found when adding metric");
     }
     abr_add_metric(type == AVMEDIA_TYPE_VIDEO ? c->video_abr : c->audio_abr,
                    tpt,
-                   buffer_level);
+                   buffer_level,
+                   buffer_max,
+                   buffer_r,
+                   buffer_c);
 }
 
 static int dashdec_get_stream(AVFormatContext* s, enum AVMediaType type) {
@@ -83,12 +87,12 @@ static void init_dash_abr(DASHContext* c) {
     c->video_abr->max_history_len = 2;
     c->video_abr->throughput_history = NULL;
     c->video_abr->buffer_level = 0;
-    c->video_abr->algorithm = SimpleThroughput; //AlwaysFirst;
+    c->video_abr->algorithm = BBA_0; // SimpleThroughput; //AlwaysFirst;
     
     c->audio_abr->max_history_len = 2;
     c->audio_abr->throughput_history = NULL;
     c->audio_abr->buffer_level = 0;
-    c->audio_abr->algorithm = SimpleThroughput; //AlwaysFirst;
+    c->audio_abr->algorithm = BBA_0; //SimpleThroughput; //AlwaysFirst;
 
     c->dashdec_add_metric = dashdec_add_metric;
     c->dashdec_get_stream = dashdec_get_stream;
