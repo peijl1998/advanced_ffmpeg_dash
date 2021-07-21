@@ -8,7 +8,7 @@ typedef struct CuePosList {
     struct CuePosList* next;
 } CuePosList;
 
-uint64_t dashdec_webm_parse_init(AVFormatContext* s, int* start, int* timescale, int* duration);
+uint64_t dashdec_webm_parse_init(AVFormatContext* s, int* start, int* timescale, double* duration);
 CuePosList* dashdec_webm_parse_cue(AVFormatContext* s);
 void dashdec_webm_free(CuePosList* c);
 

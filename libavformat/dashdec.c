@@ -309,65 +309,49 @@ static void free_representation(struct representation *pls)
     av_freep(&pls->id);
     av_freep(&pls);
 }
-/*
-static void free_video_list(DASHContext *c)
+
+static void free_video_list(DASHContext *c, int pid)
 {
     int i;
-    for (i = 0; i < c->n_videos; i++) {
-        struct representation *pls = c->videos[i];
+    for (i = 0; i < c->periods[pid]->n_videos; i++) {
+        struct representation *pls = c->periods[pid]->videos[i];
         free_representation(pls);
     }
-    av_freep(&c->videos);
-    c->n_videos = 0;
+    av_freep(&c->periods[pid]->videos);
+    c->periods[pid]->n_videos = 0;
 }
 
-static void free_audio_list(DASHContext *c)
+static void free_audio_list(DASHContext *c, int pid)
 {
     int i;
-    for (i = 0; i < c->n_audios; i++) {
-        struct representation *pls = c->audios[i];
+    for (i = 0; i < c->periods[pid]->n_audios; i++) {
+        struct representation *pls = c->periods[pid]->audios[i];
         free_representation(pls);
     }
-    av_freep(&c->audios);
-    c->n_audios = 0;
+    av_freep(&c->periods[pid]->audios);
+    c->periods[pid]->n_audios = 0;
 }
 
-static void free_subtitle_list(DASHContext *c)
+static void free_subtitle_list(DASHContext *c, int pid)
 {
     int i;
-    for (i = 0; i < c->n_subtitles; i++) {
-        struct representation *pls = c->subtitles[i];
+    for (i = 0; i < c->periods[pid]->n_subtitles; i++) {
+        struct representation *pls = c->periods[pid]->subtitles[i];
         free_representation(pls);
     }
-    av_freep(&c->subtitles);
-    c->n_subtitles = 0;
-}*/
+    av_freep(&c->periods[pid]->subtitles);
+    c->periods[pid]->n_subtitles = 0;
+}
+
 static void free_period_list(DASHContext* c) {
     int i, j;
     for (i = 0; i < c->n_periods; ++i) {
         if (!c->periods[i]) {
             continue;
         }
-        for (j = 0; j < c->periods[i]->n_videos; ++j) {
-            struct representation *pls = c->periods[i]->videos[j];
-            free_representation(pls);
-        }
-        av_freep(&c->periods[i]->videos);
-        c->periods[i]->n_videos = 0;
-
-        for (j = 0; j < c->periods[i]->n_audios; ++j) {
-            struct representation *pls = c->periods[i]->audios[j];
-            free_representation(pls);
-        }
-        av_freep(&c->periods[i]->audios);
-        c->periods[i]->n_audios = 0;
-    
-        for (j = 0; j < c->periods[i]->n_subtitles; ++j) {
-            struct representation *pls = c->periods[i]->subtitles[j];
-            free_representation(pls);
-        }
-        av_freep(&c->periods[i]->subtitles);
-        c->periods[i]->n_subtitles = 0;
+        free_video_list(c, i);
+        free_audio_list(c, i);
+        free_subtitle_list(c, i);
     }
     av_freep(&c->periods);
     c->n_periods = 0;
@@ -1552,6 +1536,7 @@ static int64_t calc_max_seg_no(struct representation *pls, DASHContext *c)
 }
 
 static void move_timelines(struct representation *rep_src, struct representation *rep_dest, DASHContext *c)
+{
     if (rep_dest && rep_src ) {
         free_timelines_list(rep_dest);
         rep_dest->timelines    = rep_src->timelines;
@@ -1673,12 +1658,12 @@ finish:
     else
         c->base_url  = base_url;
 
-    if (c->subtitles)
-        free_subtitle_list(c);
-    if (c->audios)
-        free_audio_list(c);
-    if (c->videos)
-        free_video_list(c);
+    if (c->periods[c->current_period]->subtitles)
+        free_subtitle_list(c, c->current_period);
+    if (c->periods[c->current_period]->audios)
+        free_audio_list(c, c->current_period);
+    if (c->periods[c->current_period]->videos)
+        free_video_list(c, c->current_period);
 
     c->periods[c->current_period]->n_subtitles = n_subtitles;
     c->periods[c->current_period]->subtitles = subtitles;
@@ -2532,9 +2517,6 @@ static int dash_close(AVFormatContext *s)
     DASHContext *c = s->priv_data;
     free(c->video_abr);
     free(c->audio_abr);
-    // free_audio_list(c);
-    // free_video_list(c);
-    // free_subtitle_list(c);
     free_period_list(c);
     av_dict_free(&c->avio_opts);
     av_freep(&c->base_url);
@@ -2627,7 +2609,6 @@ static int dash_read_seek(AVFormatContext *s, int stream_index, int64_t timestam
     
     /* Find which period seek_pos exists */
     for (i = 0; i < c->n_periods; ++i) {
-        printf("---- debug, seek_pos_msec=%lld, pd=%lld ----\n", seek_pos_msec, c->periods[i]->period_dutation);
         if (seek_pos_msec <= c->periods[i]->period_duration * 1000) {
             target_period = i;
             break;
@@ -2681,8 +2662,9 @@ static int handle_webm_segmentbase(char* url, DASHContext* c, struct representat
     AVFormatContext *init = NULL, *cue = NULL;
     xmlNodePtr init_node = NULL;
     struct fragment* init_seg = NULL, *cue_seg = NULL, *seg;
-    int segment_start = -1, segment_duration = -1, timescale, err, dur;
-    char* range_val = NULL;
+    int segment_start = -1, timescale, err;
+    double segment_duration, dur;
+    char range_val[50];
     CuePosList* next_cue = NULL, *cur_cue = NULL, *cue_head = NULL;
 
     if (!c || !url || !base) return -1;
@@ -2708,7 +2690,7 @@ static int handle_webm_segmentbase(char* url, DASHContext* c, struct representat
         free(init);
         return -1;
     }
-    av_log(c, AV_LOG_DEBUG, "segment start=%d seg_duration=%d timescale=%d\n", segment_start, segment_duration, timescale);
+    av_log(c, AV_LOG_INFO, "segment start=%d seg_duration=%f timescale=%d\n", segment_start, segment_duration, timescale);
 
     // Parse cue segment to get Cues
     av_dict_set_int(&opts2, "offset", cue_seg->url_offset, 0);
@@ -2731,9 +2713,8 @@ static int handle_webm_segmentbase(char* url, DASHContext* c, struct representat
             cur_cue->end = cue_seg->url_offset - 1; // NOTE: currently assume cue box is just behind cluster box.
             dur = (float)(segment_duration - cur_cue->cue_time) / timescale;
         }
-        
         sprintf(range_val, "%lu-%lu", cur_cue->begin + segment_start, cur_cue->end);
-
+        
         seg = get_Fragment(range_val);
         seg->duration = dur;
         if (!seg) return -1;
@@ -2745,7 +2726,6 @@ static int handle_webm_segmentbase(char* url, DASHContext* c, struct representat
         }
         cur_cue = next_cue;
     } while (next_cue);
-    
     init_seg->size += 1;
     rep->init_section = init_seg;
     

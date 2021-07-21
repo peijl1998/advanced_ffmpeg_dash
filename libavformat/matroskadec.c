@@ -4324,38 +4324,41 @@ static int dashdec_webm_skip_element(MatroskaDemuxContext* m) {
     return 1;
 }
 
-uint64_t dashdec_webm_parse_init(AVFormatContext* s, int* start, int* timescale, int* duration) {
+uint64_t dashdec_webm_parse_init(AVFormatContext* s, int* tgt_start, int* tgt_timescale, double* tgt_duration) {
     MatroskaDemuxContext* matroska = NULL;
     uint64_t pos, id;
     Ebml ebml = { 0 };
     int i, res, length;
+    uint64_t start = 0, timescale = 0;
+    double duration = 1e-8;
     
     if (!s->priv_data) {
         s->priv_data = (MatroskaDemuxContext*)malloc(sizeof(MatroskaDemuxContext));
     }
     matroska = s->priv_data;
     matroska->ctx = s;
-
-    *start = 0;
-    *duration = 0;
-    *timescale = -1;
-
-    while (!matroska->ctx->pb->eof_reached && (*start == 0 || *duration == 0)) {
+    while (!matroska->ctx->pb->eof_reached && (start == 0 || duration <= 1e-6)) {
         dashdec_webm_parse_id(matroska, &id);
         switch (id) {
             case MATROSKA_ID_SEGMENT:
-                *start = avio_tell(matroska->ctx->pb);
+                res = ebml_read_length(matroska, matroska->ctx->pb, &length);
+                DASHDEC_CHECK(res);
+                start = avio_tell(matroska->ctx->pb);
+                break;
+            case MATROSKA_ID_INFO:
+                res = ebml_read_length(matroska, matroska->ctx->pb, &length);
+                DASHDEC_CHECK(res);
                 break;
             case MATROSKA_ID_DURATION:
                 res = ebml_read_length(matroska, matroska->ctx->pb, &length);
                 DASHDEC_CHECK(res);
-                while (length--) {
-                    if (matroska->ctx->pb->eof_reached) {
-                        return -1;
-                    }
-                    int x = avio_r8(matroska->ctx->pb);
-                    *duration <<= 8;
-                    *duration |= x;
+                if (length == 8) {
+                    duration = av_int2double(avio_rb64(matroska->ctx->pb));
+                } else if (length == 4) {
+                    duration = av_int2float(avio_rb32(matroska->ctx->pb));
+                } else {
+                    av_log(s, AV_LOG_ERROR, "parse duration failed\n");
+                    goto fail;
                 }
                 break;
             case MATROSKA_ID_TIMECODESCALE:
@@ -4366,24 +4369,33 @@ uint64_t dashdec_webm_parse_init(AVFormatContext* s, int* start, int* timescale,
                         return -1;
                     }
                     int x = avio_r8(matroska->ctx->pb);
-                    *timescale <<= 8;
-                    *timescale |= x;
+                    timescale <<= 8;
+                    timescale |= x;
                 }
                 break;
             default:
-                continue;
+                if (id == 0) {
+                    av_log(s, AV_LOG_ERROR, "id parse fail\n");
+                    goto fail;
+                } else {
+                    res = dashdec_webm_skip_element(matroska);
+                    DASHDEC_CHECK(res);
+                }
         }
     }
-    
-    if (*start == 0 || *duration == 0) {
+    if (start == 0 || duration <= 1e-6) {
         goto fail;
     }
-    if (*timescale == -1) {
-        *timescale = 1000;
+    if (timescale == 0) {
+        timescale = 1000;
     } else {
-        *timescale = 1000000000 / *timescale;
+        timescale = 1000000000 / timescale;
     }
     free(matroska);
+    
+    *tgt_start = start;
+    *tgt_duration = duration;
+    *tgt_timescale = timescale;
     return 0;
 
 fail:
@@ -4393,8 +4405,8 @@ fail:
 }
 
 CuePosList* dashdec_webm_parse_cue(AVFormatContext* s) {
-    MatroskaDemuxContext* matroska = NULL:
-    CuePosList* cur_cue = NULL, *cue_head;
+    MatroskaDemuxContext* matroska = NULL;
+    CuePosList *cur_cue = NULL, *cue_head = NULL;
     int res;
     uint64_t id, cues_content_length, length, pos_begin;
     
@@ -4429,6 +4441,7 @@ CuePosList* dashdec_webm_parse_cue(AVFormatContext* s) {
                 }
                 res = ebml_read_length(matroska, matroska->ctx->pb, &length);
                 DASHDEC_CHECK(res);
+                cur_cue->cue_time = 0;
                 while (length--) {
                     if (matroska->ctx->pb->eof_reached) {
                         return -1;
@@ -4437,7 +4450,6 @@ CuePosList* dashdec_webm_parse_cue(AVFormatContext* s) {
                     cur_cue->cue_time <<= 8;
                     cur_cue->cue_time |= x;
                 }
-
                 break;
             case MATROSKA_ID_CUECLUSTERPOSITION:
                 if (!cur_cue || cur_cue->begin != 0) {
@@ -4458,7 +4470,7 @@ CuePosList* dashdec_webm_parse_cue(AVFormatContext* s) {
             case MATROSKA_ID_CUETRACKPOSITION:
                 if (!cur_cue) {
                     goto fail;
-                } else if (cur_cue->begin != 0) {   // TODO(pjl): currently only support one cue-track
+                } else if (cur_cue->begin != 0) {   // note: currently only support one cue-track
                     res = dashdec_webm_skip_element(matroska);
                     DASHDEC_CHECK(res);
                 }
