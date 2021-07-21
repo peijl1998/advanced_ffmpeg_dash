@@ -2624,6 +2624,11 @@ static int dash_read_seek(AVFormatContext *s, int stream_index, int64_t timestam
         av_log(s, AV_LOG_ERROR, "dash seek failed to find correct period\n");
         return AVERROR(ENOSYS);
     }
+    if (target_period != c->current_period) {
+        av_log(s, AV_LOG_INFO, "switch period from %d to %d\n", c->current_period, target_period);
+        c->current_period = target_period;
+        open_streams(s);
+    }
 
     /* Seek in discarded streams with dry_run=1 to avoid reopening them */
     for (i = 0; i < c->periods[target_period]->n_videos; i++) {
