@@ -7,6 +7,7 @@ struct fragment {
     int64_t url_offset;
     int64_t size;
     char *url;
+    float duration; // seconds, only for webm-segmentbase.
 };
 
 /*

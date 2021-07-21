@@ -571,6 +571,7 @@ static struct fragment * get_Fragment(char *range)
         return NULL;
 
     seg->size = -1;
+    seg->duration = -1;
     if (range) {
         char *str_end_offset;
         char *str_offset = av_strtok(range, "-", &str_end_offset);
@@ -1225,6 +1226,10 @@ static int parse_manifest_period(AVFormatContext* s,
         attr = attr->next;
         xmlFree(val);
     }
+    if (pd->period_duration == -1) {
+        free(pd);
+        return -1;
+    }
 
     ret = av_dynarray_add_nofree(&c->periods, &c->n_periods, pd);
     if (ret < 0) {
@@ -1259,7 +1264,7 @@ static int parse_manifest_period(AVFormatContext* s,
 static int parse_manifest(AVFormatContext *s, const char *url, AVIOContext *in)
 {
     DASHContext *c = s->priv_data;
-    int ret = 0;
+    int ret = 0, i;
     int close_in = 0;
     int64_t filesize = 0;
     AVBPrint buf;
@@ -1446,7 +1451,22 @@ cleanup:
     if (close_in) {
         avio_close(in);
     }
-    c->current_period = 0; // TODO(pjl): check whether it's right for live profile?
+    c->current_period = 0; // TODO(pjl): check whether it's right for live profile if mpd is refreshed?
+    
+    // fill in period parameters by auto-reference.
+    // duration is present for each period
+    for (i = 0; i < c->n_periods; ++i) {
+        if (c->periods[i]->period_start == -1) {
+            if (i == 0 && !c->is_live) {
+                c->periods[i]->period_start = 0;
+            }
+            // for i==0 && c->is_live, it's early available periods.
+            if (i != 0) {
+                c->periods[i]->period_start = c->periods[i - 1]->period_start + c->periods[i - 1]->period_duration;
+            }
+        }
+    }
+
     return ret;
 }
 
@@ -1502,7 +1522,6 @@ static int64_t calc_min_seg_no(AVFormatContext *s, struct representation *pls)
     return num;
 }
 
-// TODO(pjl): multi-period support need check again.
 static int64_t calc_max_seg_no(struct representation *pls, DASHContext *c)
 {
     int64_t num = 0;
@@ -1531,9 +1550,8 @@ static int64_t calc_max_seg_no(struct representation *pls, DASHContext *c)
     }
     return num;
 }
-/*
+
 static void move_timelines(struct representation *rep_src, struct representation *rep_dest, DASHContext *c)
-{
     if (rep_dest && rep_src ) {
         free_timelines_list(rep_dest);
         rep_dest->timelines    = rep_src->timelines;
@@ -1562,58 +1580,62 @@ static void move_segments(struct representation *rep_src, struct representation 
         rep_src->n_fragments = 0;
     }
 }
-*/
-// TODO(pjl): live profiles + multi period need reconsider.
-static int refresh_manifest(AVFormatContext* s) {
-    return 0;
-}
-/*
+
+// TODO(pjl): live profiles + multi period need reconsider. (not support yet)
 static int refresh_manifest(AVFormatContext *s)
 {
     int ret = 0, i;
     DASHContext *c = s->priv_data;
     // save current context
-    int n_videos = c->n_videos;
-    struct representation **videos = c->videos;
-    int n_audios = c->n_audios;
-    struct representation **audios = c->audios;
-    int n_subtitles = c->n_subtitles;
-    struct representation **subtitles = c->subtitles;
+    int n_videos = c->periods[c->current_period]->n_videos;
+    struct representation **videos = c->periods[c->current_period]->videos;
+    int n_audios = c->periods[c->current_period]->n_audios;
+    struct representation **audios = c->periods[c->current_period]->audios;
+    int n_subtitles = c->periods[c->current_period]->n_subtitles;
+    struct representation **subtitles = c->periods[c->current_period]->subtitles;
+    int n_periods = c->n_periods;
     char *base_url = c->base_url;
 
+    if (c->n_periods > 1) {
+        av_log(c, AV_LOG_ERROR, "multi period live profile not support yet\n");
+        goto finish;
+    }
+    
+
     c->base_url = NULL;
-    c->n_videos = 0;
-    c->videos = NULL;
-    c->n_audios = 0;
-    c->audios = NULL;
-    c->n_subtitles = 0;
-    c->subtitles = NULL;
+    c->periods[c->current_period]->n_videos = 0;
+    c->periods[c->current_period]->videos = NULL;
+    c->periods[c->current_period]->n_audios = 0;
+    c->periods[c->current_period]->audios = NULL;
+    c->periods[c->current_period]->n_subtitles = 0;
+    c->periods[c->current_period]->subtitles = NULL;
     ret = parse_manifest(s, s->url, NULL);
     if (ret)
         goto finish;
+    
 
-    if (c->n_videos != n_videos) {
+    if (c->periods[c->current_period]->n_videos != n_videos) {
         av_log(c, AV_LOG_ERROR,
                "new manifest has mismatched no. of video representations, %d -> %d\n",
-               n_videos, c->n_videos);
+               n_videos, c->periods[c->current_period]->n_videos);
         return AVERROR_INVALIDDATA;
     }
-    if (c->n_audios != n_audios) {
+    if (c->periods[c->current_period]->n_audios != n_audios) {
         av_log(c, AV_LOG_ERROR,
                "new manifest has mismatched no. of audio representations, %d -> %d\n",
-               n_audios, c->n_audios);
+               n_audios, c->periods[c->current_period]->n_audios);
         return AVERROR_INVALIDDATA;
     }
-    if (c->n_subtitles != n_subtitles) {
+    if (c->periods[c->current_period]->n_subtitles != n_subtitles) {
         av_log(c, AV_LOG_ERROR,
                "new manifest has mismatched no. of subtitles representations, %d -> %d\n",
-               n_subtitles, c->n_subtitles);
+               n_subtitles, c->periods[c->current_period]->n_subtitles);
         return AVERROR_INVALIDDATA;
     }
 
     for (i = 0; i < n_videos; i++) {
         struct representation *cur_video = videos[i];
-        struct representation *ccur_video = c->videos[i];
+        struct representation *ccur_video = c->periods[c->current_period]->videos[i];
         if (cur_video->timelines) {
             // calc current time
             int64_t currentTime = get_segment_start_time_based_on_timeline(cur_video, cur_video->cur_seq_no) / cur_video->fragment_timescale;
@@ -1629,7 +1651,7 @@ static int refresh_manifest(AVFormatContext *s)
     }
     for (i = 0; i < n_audios; i++) {
         struct representation *cur_audio = audios[i];
-        struct representation *ccur_audio = c->audios[i];
+        struct representation *ccur_audio = c->periods[c->current_period]->audios[i];
         if (cur_audio->timelines) {
             // calc current time
             int64_t currentTime = get_segment_start_time_based_on_timeline(cur_audio, cur_audio->cur_seq_no) / cur_audio->fragment_timescale;
@@ -1658,15 +1680,14 @@ finish:
     if (c->videos)
         free_video_list(c);
 
-    c->n_subtitles = n_subtitles;
-    c->subtitles = subtitles;
-    c->n_audios = n_audios;
-    c->audios = audios;
-    c->n_videos = n_videos;
-    c->videos = videos;
+    c->periods[c->current_period]->n_subtitles = n_subtitles;
+    c->periods[c->current_period]->subtitles = subtitles;
+    c->periods[c->current_period]->n_audios = n_audios;
+    c->periods[c->current_period]->audios = audios;
+    c->periods[c->current_period]->n_videos = n_videos;
+    c->periods[c->current_period]->videos = videos;
     return ret;
 }
-*/
 
 static struct fragment *get_current_fragment(struct representation *pls)
 {
@@ -2520,8 +2541,6 @@ static int dash_close(AVFormatContext *s)
     return 0;
 }
 
-
-// TODO(pjl): multi period only support seek in single period. implement cross-period later.
 static int dash_seek(AVFormatContext *s, struct representation *pls, int64_t seek_pos_msec, int flags, int dry_run)
 {
     int ret = 0;
@@ -2574,6 +2593,15 @@ set_seq_num:
                (int64_t)pls->cur_seq_no);
     } else if (pls->fragment_duration > 0) {
         pls->cur_seq_no = pls->first_seq_no + ((seek_pos_msec * pls->fragment_timescale) / pls->fragment_duration) / 1000;
+    } else if (pls->n_fragments > 0 && pls->fragments[0]->duration >= 0) {
+        // for webm, duration is saved in struct fragment
+        for (i = 0; i < pls->n_fragments; ++i) {
+            if (seek_pos_msec <= pls->fragments[i]->duration * 1000) {
+                pls->cur_seq_no = pls->first_seq_no + i;
+                break;
+            }
+            seek_pos_msec -= pls->fragments[i]->duration * 1000;
+        }
     } else {
         av_log(pls->parent, AV_LOG_ERROR, "dash_seek missing timeline or fragment_duration\n");
         pls->cur_seq_no = pls->first_seq_no;
@@ -2586,11 +2614,9 @@ set_seq_num:
     return ret;
 }
 
-
-// TODO(pjl): cross-period seek will be implemented later.
 static int dash_read_seek(AVFormatContext *s, int stream_index, int64_t timestamp, int flags)
 {
-    int ret = 0, i;
+    int ret = 0, i, target_period = -1;
     DASHContext *c = s->priv_data;
     int64_t seek_pos_msec = av_rescale_rnd(timestamp, 1000,
                                            s->streams[stream_index]->time_base.den,
@@ -2598,19 +2624,34 @@ static int dash_read_seek(AVFormatContext *s, int stream_index, int64_t timestam
                                            AV_ROUND_DOWN : AV_ROUND_UP);
     if ((flags & AVSEEK_FLAG_BYTE) || c->is_live)
         return AVERROR(ENOSYS);
+    
+    /* Find which period seek_pos exists */
+    for (i = 0; i < c->n_periods; ++i) {
+        printf("---- debug, seek_pos_msec=%lld, pd=%lld ----\n", seek_pos_msec, c->periods[i]->period_dutation);
+        if (seek_pos_msec <= c->periods[i]->period_duration * 1000) {
+            target_period = i;
+            break;
+        } else {
+            seek_pos_msec -= c->periods[i]->period_duration * 1000;
+        }
+    }
+    if (target_period < 0) {
+        av_log(s, AV_LOG_ERROR, "dash seek failed to find correct period\n");
+        return AVERROR(ENOSYS);
+    }
 
     /* Seek in discarded streams with dry_run=1 to avoid reopening them */
-    for (i = 0; i < c->periods[c->current_period]->n_videos; i++) {
+    for (i = 0; i < c->periods[target_period]->n_videos; i++) {
         if (!ret)
-            ret = dash_seek(s, c->periods[c->current_period]->videos[i], seek_pos_msec, flags, !c->periods[c->current_period]->videos[i]->ctx);
+            ret = dash_seek(s, c->periods[target_period]->videos[i], seek_pos_msec, flags, !c->periods[target_period]->videos[i]->ctx);
     }
-    for (i = 0; i < c->periods[c->current_period]->n_audios; i++) {
+    for (i = 0; i < c->periods[target_period]->n_audios; i++) {
         if (!ret)
-            ret = dash_seek(s, c->periods[c->current_period]->audios[i], seek_pos_msec, flags, !c->periods[c->current_period]->audios[i]->ctx);
+            ret = dash_seek(s, c->periods[target_period]->audios[i], seek_pos_msec, flags, !c->periods[target_period]->audios[i]->ctx);
     }
-    for (i = 0; i < c->periods[c->current_period]->n_subtitles; i++) {
+    for (i = 0; i < c->periods[target_period]->n_subtitles; i++) {
         if (!ret)
-            ret = dash_seek(s, c->periods[c->current_period]->subtitles[i], seek_pos_msec, flags, !c->periods[c->current_period]->subtitles[i]->ctx);
+            ret = dash_seek(s, c->periods[target_period]->subtitles[i], seek_pos_msec, flags, !c->periods[target_period]->subtitles[i]->ctx);
     }
 
     return ret;
@@ -2640,7 +2681,7 @@ static int handle_webm_segmentbase(char* url, DASHContext* c, struct representat
     AVFormatContext *init = NULL, *cue = NULL;
     xmlNodePtr init_node = NULL;
     struct fragment* init_seg = NULL, *cue_seg = NULL, *seg;
-    int segment_start = -1, err;
+    int segment_start = -1, segment_duration = -1, timescale, err, dur;
     char* range_val = NULL;
     CuePosList* next_cue = NULL, *cur_cue = NULL, *cue_head = NULL;
 
@@ -2660,8 +2701,14 @@ static int handle_webm_segmentbase(char* url, DASHContext* c, struct representat
     
     init = avformat_alloc_context();
     avio_open2(&init->pb, url, AVIO_FLAG_READ, c->interrupt_callback, &opts1);
-    segment_start = dashdec_webm_parse_init(init);
-    av_log(c, AV_LOG_DEBUG, "segment start=%d \n", segment_start);
+    err = dashdec_webm_parse_init(init, &segment_start, &timescale,  &segment_duration);
+    if (err < 0) {
+        free(init_seg);
+        free(cue_seg);
+        free(init);
+        return -1;
+    }
+    av_log(c, AV_LOG_DEBUG, "segment start=%d seg_duration=%d timescale=%d\n", segment_start, segment_duration, timescale);
 
     // Parse cue segment to get Cues
     av_dict_set_int(&opts2, "offset", cue_seg->url_offset, 0);
@@ -2679,13 +2726,16 @@ static int handle_webm_segmentbase(char* url, DASHContext* c, struct representat
         next_cue = next_cue->next;
         if (next_cue) {
             cur_cue->end = next_cue->begin - 1 + segment_start;
+            dur = (float)(next_cue->cue_time - cur_cue->cue_time) / timescale;
         } else {
-            cur_cue->end = cue_seg->url_offset - 1; // TODO(pjl): currently assume cue box is just behind cluster box.
+            cur_cue->end = cue_seg->url_offset - 1; // NOTE: currently assume cue box is just behind cluster box.
+            dur = (float)(segment_duration - cur_cue->cue_time) / timescale;
         }
         
         sprintf(range_val, "%lu-%lu", cur_cue->begin + segment_start, cur_cue->end);
 
         seg = get_Fragment(range_val);
+        seg->duration = dur;
         if (!seg) return -1;
         seg->url = url;
         err = av_dynarray_add_nofree(&rep->fragments, &rep->n_fragments, seg);
