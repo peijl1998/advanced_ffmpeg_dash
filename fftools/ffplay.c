@@ -2783,11 +2783,11 @@ static void abr_update(enum AVMediaType type, AVFormatContext* ic, VideoState* i
     if (!dc) av_log(is, AV_LOG_ERROR, "dash context is null\n");
     // NOTE: assume stream_index is sorted by VIDEO/AUDIO/SUBTITLE
     if (type == AVMEDIA_TYPE_VIDEO) {
-        cur_rep = dc->videos[st_index[type]];
+        cur_rep = dc->periods[dc->current_period]->videos[st_index[type]];
         buffer_level = is->videoq.size;
     } else if (type == AVMEDIA_TYPE_AUDIO) {
         // TODO(pjl): check is it right?
-        cur_rep = dc->audios[st_index[type] - dc->n_videos];
+        cur_rep = dc->periods[dc->current_period]->audios[st_index[type] - dc->periods[dc->current_period]->n_videos];
         buffer_level = is->audioq.size;
     }
     if (!cur_rep->input) return ;

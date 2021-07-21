@@ -61,21 +61,21 @@ static int dashdec_get_stream(AVFormatContext* s, enum AVMediaType type) {
 
     
     if (type == AVMEDIA_TYPE_VIDEO) {
-        size = c->n_videos;
+        size = c->periods[c->current_period]->n_videos;
         bandwidth = (int*)malloc(sizeof(int) * size);
         for (int i = 0; i < size; ++i) {
-            bandwidth[i] = c->videos[i]->bandwidth;
+            bandwidth[i] = c->periods[c->current_period]->videos[i]->bandwidth;
         }
         ai = abr_get_stream(c->video_abr, bandwidth, size);
-        return ai == -1 ? -1 : c->videos[ai]->stream_index;
+        return ai == -1 ? -1 : c->periods[c->current_period]->videos[ai]->stream_index;
     } else {
-        size = c->n_audios;
+        size = c->periods[c->current_period]->n_audios;
         bandwidth = (int*)malloc(sizeof(int) * size);
         for (int i = 0; i < size; ++i) {
-            bandwidth[i] = c->audios[i]->bandwidth;
+            bandwidth[i] = c->periods[c->current_period]->audios[i]->bandwidth;
         }
         ai = abr_get_stream(c->audio_abr, bandwidth, size);
-        return ai == -1 ? -1 : c->audios[ai]->stream_index;
+        return ai == -1 ? -1 : c->periods[c->current_period]->audios[ai]->stream_index;
     }
 
 }
@@ -96,6 +96,13 @@ static void init_dash_abr(DASHContext* c) {
 
     c->dashdec_add_metric = dashdec_add_metric;
     c->dashdec_get_stream = dashdec_get_stream;
+}
+
+static void copy_metadata(AVStream *st, const char *key, char **value)
+{
+    if (*value) {
+        av_dict_set(&st->metadata, key, *value, AV_DICT_DONT_STRDUP_VAL);
+    }
 }
 
 static int handle_webm_segmentbase(char* url, DASHContext* c, struct representation* rep, xmlNodePtr base);
@@ -307,37 +314,51 @@ static void free_representation(struct representation *pls)
     av_freep(&pls);
 }
 
-static void free_video_list(DASHContext *c)
+static void free_video_list(DASHContext *c, int pid)
 {
     int i;
-    for (i = 0; i < c->n_videos; i++) {
-        struct representation *pls = c->videos[i];
+    for (i = 0; i < c->periods[pid]->n_videos; i++) {
+        struct representation *pls = c->periods[pid]->videos[i];
         free_representation(pls);
     }
-    av_freep(&c->videos);
-    c->n_videos = 0;
+    av_freep(&c->periods[pid]->videos);
+    c->periods[pid]->n_videos = 0;
 }
 
-static void free_audio_list(DASHContext *c)
+static void free_audio_list(DASHContext *c, int pid)
 {
     int i;
-    for (i = 0; i < c->n_audios; i++) {
-        struct representation *pls = c->audios[i];
+    for (i = 0; i < c->periods[pid]->n_audios; i++) {
+        struct representation *pls = c->periods[pid]->audios[i];
         free_representation(pls);
     }
-    av_freep(&c->audios);
-    c->n_audios = 0;
+    av_freep(&c->periods[pid]->audios);
+    c->periods[pid]->n_audios = 0;
 }
 
-static void free_subtitle_list(DASHContext *c)
+static void free_subtitle_list(DASHContext *c, int pid)
 {
     int i;
-    for (i = 0; i < c->n_subtitles; i++) {
-        struct representation *pls = c->subtitles[i];
+    for (i = 0; i < c->periods[pid]->n_subtitles; i++) {
+        struct representation *pls = c->periods[pid]->subtitles[i];
         free_representation(pls);
     }
-    av_freep(&c->subtitles);
-    c->n_subtitles = 0;
+    av_freep(&c->periods[pid]->subtitles);
+    c->periods[pid]->n_subtitles = 0;
+}
+
+static void free_period_list(DASHContext* c) {
+    int i, j;
+    for (i = 0; i < c->n_periods; ++i) {
+        if (!c->periods[i]) {
+            continue;
+        }
+        free_video_list(c, i);
+        free_audio_list(c, i);
+        free_subtitle_list(c, i);
+    }
+    av_freep(&c->periods);
+    c->n_periods = 0;
 }
 
 static int open_url(AVFormatContext *s, AVIOContext **pb, const char *url,
@@ -515,11 +536,11 @@ static enum AVMediaType get_content_type(xmlNodePtr node)
     }
     return type;
 }
-
+ 
 static int is_webm(xmlNodePtr node) {
     char *val = NULL;
     if (node) {
-        char *val = xmlGetProp(node, "mimeType");
+        val = xmlGetProp(node, "mimeType");
         if (val) {  return 1;
             if (av_stristr(val, "webm")) {
                 return 1;
@@ -538,6 +559,7 @@ static struct fragment * get_Fragment(char *range)
         return NULL;
 
     seg->size = -1;
+    seg->duration = -1;
     if (range) {
         char *str_end_offset;
         char *str_offset = av_strtok(range, "-", &str_end_offset);
@@ -823,8 +845,8 @@ static int parse_manifest_representation(AVFormatContext *s, const char *url,
     rep = av_mallocz(sizeof(struct representation));
     if (!rep)
         return AVERROR(ENOMEM);
-    if (c->adaptionset_lang) {
-        rep->lang = av_strdup(c->adaptionset_lang);
+    if (c->periods[c->n_periods - 1]->adaptionset_lang) {
+        rep->lang = av_strdup(c->periods[c->n_periods - 1]->adaptionset_lang);
         if (!rep->lang) {
             av_log(s, AV_LOG_ERROR, "alloc language memory failure\n");
             av_freep(&rep);
@@ -1036,13 +1058,13 @@ static int parse_manifest_representation(AVFormatContext *s, const char *url,
 
     switch (type) {
     case AVMEDIA_TYPE_VIDEO:
-        ret = av_dynarray_add_nofree(&c->videos, &c->n_videos, rep);
+        ret = av_dynarray_add_nofree(&c->periods[c->current_period]->videos, &c->periods[c->n_periods - 1]->n_videos, rep);
         break;
     case AVMEDIA_TYPE_AUDIO:
-        ret = av_dynarray_add_nofree(&c->audios, &c->n_audios, rep);
+        ret = av_dynarray_add_nofree(&c->periods[c->current_period]->audios, &c->periods[c->n_periods - 1]->n_audios, rep);
         break;
     case AVMEDIA_TYPE_SUBTITLE:
-        ret = av_dynarray_add_nofree(&c->subtitles, &c->n_subtitles, rep);
+        ret = av_dynarray_add_nofree(&c->periods[c->current_period]->subtitles, &c->periods[c->n_periods - 1]->n_subtitles, rep);
         break;
     }
     if (ret < 0)
@@ -1060,15 +1082,15 @@ free:
     goto end;
 }
 
-static int parse_manifest_adaptationset_attr(AVFormatContext *s, xmlNodePtr adaptionset_node)
+static int parse_manifest_adaptationset_attr(AVFormatContext *s,
+                                             xmlNodePtr adaptionset_node)
 {
     DASHContext *c = s->priv_data;
-
     if (!adaptionset_node) {
         av_log(s, AV_LOG_WARNING, "Cannot get AdaptionSet\n");
         return AVERROR(EINVAL);
     }
-    c->adaptionset_lang = xmlGetProp(adaptionset_node, "lang");
+    c->periods[c->n_periods - 1]->adaptionset_lang = xmlGetProp(adaptionset_node, "lang");
 
     return 0;
 }
@@ -1088,6 +1110,11 @@ static int parse_manifest_adaptationset(AVFormatContext *s, const char *url,
     xmlNodePtr adaptionset_segmentlist_node = NULL;
     xmlNodePtr adaptionset_supplementalproperty_node = NULL;
     xmlNodePtr node = NULL;
+    
+    if (c->n_periods == 0) {
+        av_log(s, AV_LOG_ERROR, "Cannot get Periods\n");
+        return AVERROR(EINVAL);
+    }
 
     ret = parse_manifest_adaptationset_attr(s, adaptionset_node);
     if (ret < 0)
@@ -1124,8 +1151,8 @@ static int parse_manifest_adaptationset(AVFormatContext *s, const char *url,
     }
 
 err:
-    xmlFree(c->adaptionset_lang);
-    c->adaptionset_lang = NULL;
+    xmlFree(c->periods[c->current_period]->adaptionset_lang);
+    c->periods[c->current_period]->adaptionset_lang = NULL;
     return ret;
 }
 
@@ -1158,10 +1185,74 @@ static int parse_programinformation(AVFormatContext *s, xmlNodePtr node)
     return 0;
 }
 
+static int parse_manifest_period(AVFormatContext* s,
+                                 const char *url,
+                                 xmlNodePtr period_node,
+                                 xmlNodePtr mpd_baseurl_node) {
+    int ret = 0;
+    DASHContext* c = s->priv_data;
+    char* val = NULL;
+    xmlAttrPtr attr = NULL;
+    xmlNodePtr adaptionset_node = NULL;
+    xmlNodePtr period_baseurl_node = NULL;
+    xmlNodePtr period_segmenttemplate_node = NULL;
+    xmlNodePtr period_segmentlist_node = NULL;
+
+    Period* pd = av_mallocz(sizeof(Period)); 
+    pd->period_duration = -1;
+    pd->period_start = -1;
+
+    // parse period attrs
+    attr = period_node->properties;
+    while (attr) {
+        val = xmlGetProp(period_node, attr->name);
+        if (!av_strcasecmp(attr->name, "duration")) {
+            pd->period_duration = get_duration_insec(s, val);
+        } else if (!av_strcasecmp(attr->name, "start")) {
+            pd->period_start = get_duration_insec(s, val);
+        }
+        attr = attr->next;
+        xmlFree(val);
+    }
+    if (pd->period_duration == -1) {
+        free(pd);
+        return -1;
+    }
+
+    ret = av_dynarray_add_nofree(&c->periods, &c->n_periods, pd);
+    if (ret < 0) {
+        free(pd);
+        return ret;
+    }
+    c->current_period = c->n_periods - 1;
+
+    // parse adaptation recursively 
+    adaptionset_node = xmlFirstElementChild(period_node);
+    while (adaptionset_node) {
+        if (!av_strcasecmp(adaptionset_node->name, "BaseURL")) {
+            period_baseurl_node = adaptionset_node;
+        } else if (!av_strcasecmp(adaptionset_node->name, "SegmentTemplate")) {
+            period_segmenttemplate_node = adaptionset_node;
+        } else if (!av_strcasecmp(adaptionset_node->name, "SegmentList")) {
+            period_segmentlist_node = adaptionset_node;
+        } else if (!av_strcasecmp(adaptionset_node->name, "AdaptationSet")) {
+            ret = parse_manifest_adaptationset(s, url, adaptionset_node, mpd_baseurl_node, period_baseurl_node, period_segmenttemplate_node, period_segmentlist_node);
+            if (ret < 0) {
+                free(pd);
+                break;
+            }
+        }
+        adaptionset_node = xmlNextElementSibling(adaptionset_node);
+    }
+    
+
+    return ret;
+}
+
 static int parse_manifest(AVFormatContext *s, const char *url, AVIOContext *in)
 {
     DASHContext *c = s->priv_data;
-    int ret = 0;
+    int ret = 0, i;
     int close_in = 0;
     int64_t filesize = 0;
     AVBPrint buf;
@@ -1169,17 +1260,17 @@ static int parse_manifest(AVFormatContext *s, const char *url, AVIOContext *in)
     xmlDoc *doc = NULL;
     xmlNodePtr root_element = NULL;
     xmlNodePtr node = NULL;
-    xmlNodePtr period_node = NULL;
+    // xmlNodePtr period_node = NULL;
     xmlNodePtr tmp_node = NULL;
     xmlNodePtr mpd_baseurl_node = NULL;
-    xmlNodePtr period_baseurl_node = NULL;
-    xmlNodePtr period_segmenttemplate_node = NULL;
-    xmlNodePtr period_segmentlist_node = NULL;
-    xmlNodePtr adaptionset_node = NULL;
+    // xmlNodePtr period_baseurl_node = NULL;
+    // xmlNodePtr period_segmenttemplate_node = NULL;
+    // xmlNodePtr period_segmentlist_node = NULL;
+    // xmlNodePtr adaptionset_node = NULL;
     xmlAttrPtr attr = NULL;
     char *val  = NULL;
-    uint32_t period_duration_sec = 0;
-    uint32_t period_start_sec = 0;
+    // uint32_t period_duration_sec = 0;
+    // uint32_t period_start_sec = 0;
 
     if (!in) {
         close_in = 1;
@@ -1284,6 +1375,7 @@ static int parse_manifest(AVFormatContext *s, const char *url, AVIOContext *in)
         node = xmlFirstElementChild(node);
         while (node) {
             if (!av_strcasecmp(node->name, "Period")) {
+                /*
                 period_duration_sec = 0;
                 period_start_sec = 0;
                 attr = node->properties;
@@ -1304,17 +1396,24 @@ static int parse_manifest(AVFormatContext *s, const char *url, AVIOContext *in)
                     if (c->period_start > 0)
                         c->media_presentation_duration = c->period_duration;
                 }
+                */
+
+                ret = parse_manifest_period(s, url, node, mpd_baseurl_node);
+                if (ret < 0) {
+                    free_period_list(c);
+                    goto cleanup;
+                }
             } else if (!av_strcasecmp(node->name, "ProgramInformation")) {
                 parse_programinformation(s, node);
             }
             node = xmlNextElementSibling(node);
         }
-        if (!period_node) {
+        /*if (!period_node) {
             av_log(s, AV_LOG_ERROR, "Unable to parse '%s' - missing Period node\n", url);
             ret = AVERROR_INVALIDDATA;
             goto cleanup;
         }
-
+        
         adaptionset_node = xmlFirstElementChild(period_node);
         while (adaptionset_node) {
             if (!av_strcasecmp(adaptionset_node->name, "BaseURL")) {
@@ -1328,6 +1427,7 @@ static int parse_manifest(AVFormatContext *s, const char *url, AVIOContext *in)
             }
             adaptionset_node = xmlNextElementSibling(adaptionset_node);
         }
+        */
 cleanup:
         /*free the document */
         xmlFreeDoc(doc);
@@ -1339,6 +1439,22 @@ cleanup:
     if (close_in) {
         avio_close(in);
     }
+    c->current_period = 0; // TODO(pjl): check whether it's right for live profile if mpd is refreshed?
+    
+    // fill in period parameters by auto-reference.
+    // duration is present for each period
+    for (i = 0; i < c->n_periods; ++i) {
+        if (c->periods[i]->period_start == -1) {
+            if (i == 0 && !c->is_live) {
+                c->periods[i]->period_start = 0;
+            }
+            // for i==0 && c->is_live, it's early available periods.
+            if (i != 0) {
+                c->periods[i]->period_start = c->periods[i - 1]->period_start + c->periods[i - 1]->period_duration;
+            }
+        }
+    }
+
     return ret;
 }
 
@@ -1406,7 +1522,7 @@ static int64_t calc_max_seg_no(struct representation *pls, DASHContext *c)
         for (i = 0; i < pls->n_timelines; i++) {
             if (pls->timelines[i]->repeat == -1) {
                 int length_of_each_segment = pls->timelines[i]->duration / pls->fragment_timescale;
-                num =  c->period_duration / length_of_each_segment;
+                num =  c->periods[c->current_period]->period_duration / length_of_each_segment;
             } else {
                 num += pls->timelines[i]->repeat;
             }
@@ -1414,9 +1530,12 @@ static int64_t calc_max_seg_no(struct representation *pls, DASHContext *c)
     } else if (c->is_live && pls->fragment_duration) {
         num = pls->first_seq_no + (((get_current_time_in_sec() - c->availability_start_time)) * pls->fragment_timescale)  / pls->fragment_duration;
     } else if (pls->fragment_duration) {
-        num = pls->first_seq_no + av_rescale_rnd(1, c->media_presentation_duration * pls->fragment_timescale, pls->fragment_duration, AV_ROUND_UP);
+        if (c->periods[c->current_period]->period_duration > 0) {
+            num = pls->first_seq_no + av_rescale_rnd(1, c->periods[c->current_period]->period_duration * pls->fragment_timescale, pls->fragment_duration, AV_ROUND_UP) - 1;
+        } else {
+            num = pls->first_seq_no + av_rescale_rnd(1, c->media_presentation_duration * pls->fragment_timescale, pls->fragment_duration, AV_ROUND_UP) - 1;
+        }
     }
-
     return num;
 }
 
@@ -1451,53 +1570,61 @@ static void move_segments(struct representation *rep_src, struct representation 
     }
 }
 
-
+// TODO(pjl): live profiles + multi period need reconsider. (not support yet)
 static int refresh_manifest(AVFormatContext *s)
 {
     int ret = 0, i;
     DASHContext *c = s->priv_data;
     // save current context
-    int n_videos = c->n_videos;
-    struct representation **videos = c->videos;
-    int n_audios = c->n_audios;
-    struct representation **audios = c->audios;
-    int n_subtitles = c->n_subtitles;
-    struct representation **subtitles = c->subtitles;
+    int n_videos = c->periods[c->current_period]->n_videos;
+    struct representation **videos = c->periods[c->current_period]->videos;
+    int n_audios = c->periods[c->current_period]->n_audios;
+    struct representation **audios = c->periods[c->current_period]->audios;
+    int n_subtitles = c->periods[c->current_period]->n_subtitles;
+    struct representation **subtitles = c->periods[c->current_period]->subtitles;
+    int n_periods = c->n_periods;
     char *base_url = c->base_url;
 
+    if (c->n_periods > 1) {
+        av_log(c, AV_LOG_ERROR, "multi period live profile not support yet\n");
+        goto finish;
+    }
+    
+
     c->base_url = NULL;
-    c->n_videos = 0;
-    c->videos = NULL;
-    c->n_audios = 0;
-    c->audios = NULL;
-    c->n_subtitles = 0;
-    c->subtitles = NULL;
+    c->periods[c->current_period]->n_videos = 0;
+    c->periods[c->current_period]->videos = NULL;
+    c->periods[c->current_period]->n_audios = 0;
+    c->periods[c->current_period]->audios = NULL;
+    c->periods[c->current_period]->n_subtitles = 0;
+    c->periods[c->current_period]->subtitles = NULL;
     ret = parse_manifest(s, s->url, NULL);
     if (ret)
         goto finish;
+    
 
-    if (c->n_videos != n_videos) {
+    if (c->periods[c->current_period]->n_videos != n_videos) {
         av_log(c, AV_LOG_ERROR,
                "new manifest has mismatched no. of video representations, %d -> %d\n",
-               n_videos, c->n_videos);
+               n_videos, c->periods[c->current_period]->n_videos);
         return AVERROR_INVALIDDATA;
     }
-    if (c->n_audios != n_audios) {
+    if (c->periods[c->current_period]->n_audios != n_audios) {
         av_log(c, AV_LOG_ERROR,
                "new manifest has mismatched no. of audio representations, %d -> %d\n",
-               n_audios, c->n_audios);
+               n_audios, c->periods[c->current_period]->n_audios);
         return AVERROR_INVALIDDATA;
     }
-    if (c->n_subtitles != n_subtitles) {
+    if (c->periods[c->current_period]->n_subtitles != n_subtitles) {
         av_log(c, AV_LOG_ERROR,
                "new manifest has mismatched no. of subtitles representations, %d -> %d\n",
-               n_subtitles, c->n_subtitles);
+               n_subtitles, c->periods[c->current_period]->n_subtitles);
         return AVERROR_INVALIDDATA;
     }
 
     for (i = 0; i < n_videos; i++) {
         struct representation *cur_video = videos[i];
-        struct representation *ccur_video = c->videos[i];
+        struct representation *ccur_video = c->periods[c->current_period]->videos[i];
         if (cur_video->timelines) {
             // calc current time
             int64_t currentTime = get_segment_start_time_based_on_timeline(cur_video, cur_video->cur_seq_no) / cur_video->fragment_timescale;
@@ -1513,7 +1640,7 @@ static int refresh_manifest(AVFormatContext *s)
     }
     for (i = 0; i < n_audios; i++) {
         struct representation *cur_audio = audios[i];
-        struct representation *ccur_audio = c->audios[i];
+        struct representation *ccur_audio = c->periods[c->current_period]->audios[i];
         if (cur_audio->timelines) {
             // calc current time
             int64_t currentTime = get_segment_start_time_based_on_timeline(cur_audio, cur_audio->cur_seq_no) / cur_audio->fragment_timescale;
@@ -1535,19 +1662,19 @@ finish:
     else
         c->base_url  = base_url;
 
-    if (c->subtitles)
-        free_subtitle_list(c);
-    if (c->audios)
-        free_audio_list(c);
-    if (c->videos)
-        free_video_list(c);
+    if (c->periods[c->current_period]->subtitles)
+        free_subtitle_list(c, c->current_period);
+    if (c->periods[c->current_period]->audios)
+        free_audio_list(c, c->current_period);
+    if (c->periods[c->current_period]->videos)
+        free_video_list(c, c->current_period);
 
-    c->n_subtitles = n_subtitles;
-    c->subtitles = subtitles;
-    c->n_audios = n_audios;
-    c->audios = audios;
-    c->n_videos = n_videos;
-    c->videos = videos;
+    c->periods[c->current_period]->n_subtitles = n_subtitles;
+    c->periods[c->current_period]->subtitles = subtitles;
+    c->periods[c->current_period]->n_audios = n_audios;
+    c->periods[c->current_period]->audios = audios;
+    c->periods[c->current_period]->n_videos = n_videos;
+    c->periods[c->current_period]->videos = videos;
     return ret;
 }
 
@@ -1856,7 +1983,7 @@ static int reopen_demux_for_component(AVFormatContext *s, struct representation 
     AVDictionary  *in_fmt_opts = NULL;
     uint8_t *avio_ctx_buffer  = NULL;
     int ret = 0, i;
-
+    
     if (pls->ctx) {
         close_demux_for_component(pls);
     }
@@ -2013,6 +2140,7 @@ static int copy_init_section(struct representation *rep_dest, struct representat
 
 static int dash_close(AVFormatContext *s);
 
+/*
 static void move_metadata(AVStream *st, const char *key, char **value)
 {
     if (*value) {
@@ -2020,44 +2148,44 @@ static void move_metadata(AVStream *st, const char *key, char **value)
         *value = NULL;
     }
 }
+*/
 
-static int dash_read_header(AVFormatContext *s)
-{
-    DASHContext *c = s->priv_data;
-    struct representation *rep;
-    AVProgram *program;
-    int ret = 0;
+static int open_streams(AVFormatContext* s) {
+    DASHContext* c = s->priv_data;
     int stream_index = 0;
+    int ret = 0;
+    AVProgram *program;
+    struct representation* rep;
     int i;
-    
-    // BUPT
-    init_dash_abr(c);
-    ////////
 
-    c->interrupt_callback = &s->interrupt_callback;
-
-    if ((ret = save_avio_options(s)) < 0)
-        goto fail;
-
-    if ((ret = parse_manifest(s, s->url, s->pb)) < 0)
-        goto fail;
-
-    /* If this isn't a live stream, fill the total duration of the
-     * stream. */
-    if (!c->is_live) {
-        s->duration = (int64_t) c->media_presentation_duration * AV_TIME_BASE;
-    } else {
-        av_dict_set(&c->avio_opts, "seekable", "0", 0);
-    }
-
-    if(c->n_videos)
-        c->is_init_section_common_video = is_common_init_section_exist(c->videos, c->n_videos);
 
     /* Open the demuxer for video and audio components if available */
-    for (i = 0; i < c->n_videos; i++) {
-        rep = c->videos[i];
-        if (i > 0 && c->is_init_section_common_video) {
-            ret = copy_init_section(rep, c->videos[0]);
+    if(c->periods[c->current_period]->n_videos)
+        c->periods[c->current_period]->is_init_section_common_video = is_common_init_section_exist(c->periods[c->current_period]->videos,
+                                                                                           c->periods[c->current_period]->n_videos);
+
+    for (i = 0; i < c->periods[c->current_period]->n_videos; i++) {
+        rep = c->periods[c->current_period]->videos[i];
+        if (i > 0 && c->periods[c->current_period]->is_init_section_common_video) {
+            ret = copy_init_section(rep, c->periods[c->current_period]->videos[0]);
+            if (ret < 0)
+                goto fail;
+        }
+        ret = open_demux_for_component(s, rep);
+        if (ret)
+            goto fail;
+        rep->stream_index = stream_index;
+        ++stream_index;
+    }
+
+    if(c->periods[c->current_period]->n_audios)
+        c->periods[c->current_period]->is_init_section_common_audio = is_common_init_section_exist(c->periods[c->current_period]->audios,
+                                                                                                   c->periods[c->current_period]->n_audios);
+
+    for (i = 0; i < c->periods[c->current_period]->n_audios; i++) {
+        rep = c->periods[c->current_period]->audios[i];
+        if (i > 0 && c->periods[c->current_period]->is_init_section_common_audio) {
+            ret = copy_init_section(rep, c->periods[c->current_period]->audios[0]);
             if (ret < 0)
                 goto fail;
         }
@@ -2069,31 +2197,14 @@ static int dash_read_header(AVFormatContext *s)
         ++stream_index;
     }
 
-    if(c->n_audios)
-        c->is_init_section_common_audio = is_common_init_section_exist(c->audios, c->n_audios);
+    if (c->periods[c->current_period]->n_subtitles)
+        c->periods[c->current_period]->is_init_section_common_subtitle = is_common_init_section_exist(c->periods[c->current_period]->subtitles,
+                                                                                                      c->periods[c->current_period]->n_subtitles);
 
-    for (i = 0; i < c->n_audios; i++) {
-        rep = c->audios[i];
-        if (i > 0 && c->is_init_section_common_audio) {
-            ret = copy_init_section(rep, c->audios[0]);
-            if (ret < 0)
-                goto fail;
-        }
-        ret = open_demux_for_component(s, rep);
-
-        if (ret)
-            goto fail;
-        rep->stream_index = stream_index;
-        ++stream_index;
-    }
-
-    if (c->n_subtitles)
-        c->is_init_section_common_subtitle = is_common_init_section_exist(c->subtitles, c->n_subtitles);
-
-    for (i = 0; i < c->n_subtitles; i++) {
-        rep = c->subtitles[i];
-        if (i > 0 && c->is_init_section_common_subtitle) {
-            ret = copy_init_section(rep, c->subtitles[0]);
+    for (i = 0; i < c->periods[c->current_period]->n_subtitles; i++) {
+        rep = c->periods[c->current_period]->subtitles[i];
+        if (i > 0 && c->periods[c->current_period]->is_init_section_common_subtitle) {
+            ret = copy_init_section(rep, c->periods[c->current_period]->subtitles[0]);
             if (ret < 0)
                 goto fail;
         }
@@ -2117,30 +2228,167 @@ static int dash_read_header(AVFormatContext *s)
         goto fail;
     }
 
-    for (i = 0; i < c->n_videos; i++) {
-        rep = c->videos[i];
+    for (i = 0; i < c->periods[c->current_period]->n_videos; i++) {
+        rep = c->periods[c->current_period]->videos[i];
         av_program_add_stream_index(s, 0, rep->stream_index);
         rep->assoc_stream = s->streams[rep->stream_index];
         if (rep->bandwidth > 0)
             av_dict_set_int(&rep->assoc_stream->metadata, "variant_bitrate", rep->bandwidth, 0);
-        move_metadata(rep->assoc_stream, "id", &rep->id);
+        // move_metadata(rep->assoc_stream, "id", &rep->id);
+        copy_metadata(rep->assoc_stream, "id", &rep->id);
     }
-    for (i = 0; i < c->n_audios; i++) {
-        rep = c->audios[i];
+    for (i = 0; i < c->periods[c->current_period]->n_audios; i++) {
+        rep = c->periods[c->current_period]->audios[i];
         av_program_add_stream_index(s, 0, rep->stream_index);
         rep->assoc_stream = s->streams[rep->stream_index];
         if (rep->bandwidth > 0)
             av_dict_set_int(&rep->assoc_stream->metadata, "variant_bitrate", rep->bandwidth, 0);
-        move_metadata(rep->assoc_stream, "id", &rep->id);
-        move_metadata(rep->assoc_stream, "language", &rep->lang);
+        // move_metadata(rep->assoc_stream, "id", &rep->id);
+        // move_metadata(rep->assoc_stream, "language", &rep->lang);
+        copy_metadata(rep->assoc_stream, "id", &rep->id);
+        copy_metadata(rep->assoc_stream, "language", &rep->lang);
     }
-    for (i = 0; i < c->n_subtitles; i++) {
-        rep = c->subtitles[i];
+    for (i = 0; i < c->periods[c->current_period]->n_subtitles; i++) {
+        rep = c->periods[c->current_period]->subtitles[i];
         av_program_add_stream_index(s, 0, rep->stream_index);
         rep->assoc_stream = s->streams[rep->stream_index];
-        move_metadata(rep->assoc_stream, "id", &rep->id);
-        move_metadata(rep->assoc_stream, "language", &rep->lang);
+        // move_metadata(rep->assoc_stream, "id", &rep->id);
+        // move_metadata(rep->assoc_stream, "language", &rep->lang);
+        copy_metadata(rep->assoc_stream, "id", &rep->id);
+        copy_metadata(rep->assoc_stream, "language", &rep->lang);
     }
+
+    return ret;
+fail:
+    dash_close(s);
+    return ret;
+}
+
+static int dash_read_header(AVFormatContext *s)
+{
+    DASHContext *c = s->priv_data;
+    // struct representation *rep;
+    // AVProgram *program;
+    int ret = 0;
+    // int stream_index = 0;
+    // int i;
+    
+    // BUPT
+    init_dash_abr(c);
+    ////////
+
+    c->interrupt_callback = &s->interrupt_callback;
+
+    if ((ret = save_avio_options(s)) < 0)
+        goto fail;
+
+    if ((ret = parse_manifest(s, s->url, s->pb)) < 0)
+        goto fail;
+
+    /* If this isn't a live stream, fill the total duration of the
+     * stream. */
+    if (!c->is_live) {
+        s->duration = (int64_t) c->media_presentation_duration * AV_TIME_BASE;
+    } else {
+        av_dict_set(&c->avio_opts, "seekable", "0", 0);
+    }
+
+    if(c->periods[c->current_period]->n_videos)
+        c->periods[c->current_period]->is_init_section_common_video = is_common_init_section_exist(c->periods[c->current_period]->videos,
+                                                                                           c->periods[c->current_period]->n_videos);
+    if ((ret = open_streams(s)) < 0) {
+        goto fail;
+    }
+    /* Open the demuxer for video and audio components if available */
+    // for (i = 0; i < c->periods[c->current_period]->n_videos; i++) {
+    //     rep = c->periods[c->current_period]->videos[i];
+    //     if (i > 0 && c->periods[c->current_period]->is_init_section_common_video) {
+    //         ret = copy_init_section(rep, c->periods[c->current_period]->videos[0]);
+    //         if (ret < 0)
+    //             goto fail;
+    //     }
+    //     ret = open_demux_for_component(s, rep);
+
+    //     if (ret)
+    //         goto fail;
+    //     rep->stream_index = stream_index;
+    //     ++stream_index;
+    // }
+
+    // if(c->periods[c->current_period]->n_audios)
+    //     c->periods[c->current_period]->is_init_section_common_audio = is_common_init_section_exist(c->periods[c->current_period]->audios,
+    //                                                                                                c->periods[c->current_period]->n_audios);
+
+    // for (i = 0; i < c->periods[c->current_period]->n_audios; i++) {
+    //     rep = c->periods[c->current_period]->audios[i];
+    //     if (i > 0 && c->periods[c->current_period]->is_init_section_common_audio) {
+    //         ret = copy_init_section(rep, c->periods[c->current_period]->audios[0]);
+    //         if (ret < 0)
+    //             goto fail;
+    //     }
+    //     ret = open_demux_for_component(s, rep);
+
+    //     if (ret)
+    //         goto fail;
+    //     rep->stream_index = stream_index;
+    //     ++stream_index;
+    // }
+
+    // if (c->periods[c->current_period]->n_subtitles)
+    //     c->periods[c->current_period]->is_init_section_common_subtitle = is_common_init_section_exist(c->periods[c->current_period]->subtitles,
+    //                                                                                                   c->periods[c->current_period]->n_subtitles);
+
+    // for (i = 0; i < c->periods[c->current_period]->n_subtitles; i++) {
+    //     rep = c->periods[c->current_period]->subtitles[i];
+    //     if (i > 0 && c->periods[c->current_period]->is_init_section_common_subtitle) {
+    //         ret = copy_init_section(rep, c->periods[c->current_period]->subtitles[0]);
+    //         if (ret < 0)
+    //             goto fail;
+    //     }
+    //     ret = open_demux_for_component(s, rep);
+
+    //     if (ret)
+    //         goto fail;
+    //     rep->stream_index = stream_index;
+    //     ++stream_index;
+    // }
+
+    // if (!stream_index) {
+    //     ret = AVERROR_INVALIDDATA;
+    //     goto fail;
+    // }
+
+    // /* Create a program */
+    // program = av_new_program(s, 0);
+    // if (!program) {
+    //     ret = AVERROR(ENOMEM);
+    //     goto fail;
+    // }
+
+    // for (i = 0; i < c->periods[c->current_period]->n_videos; i++) {
+    //     rep = c->periods[c->current_period]->videos[i];
+    //     av_program_add_stream_index(s, 0, rep->stream_index);
+    //     rep->assoc_stream = s->streams[rep->stream_index];
+    //     if (rep->bandwidth > 0)
+    //         av_dict_set_int(&rep->assoc_stream->metadata, "variant_bitrate", rep->bandwidth, 0);
+    //     move_metadata(rep->assoc_stream, "id", &rep->id);
+    // }
+    // for (i = 0; i < c->periods[c->current_period]->n_audios; i++) {
+    //     rep = c->periods[c->current_period]->audios[i];
+    //     av_program_add_stream_index(s, 0, rep->stream_index);
+    //     rep->assoc_stream = s->streams[rep->stream_index];
+    //     if (rep->bandwidth > 0)
+    //         av_dict_set_int(&rep->assoc_stream->metadata, "variant_bitrate", rep->bandwidth, 0);
+    //     move_metadata(rep->assoc_stream, "id", &rep->id);
+    //     move_metadata(rep->assoc_stream, "language", &rep->lang);
+    // }
+    // for (i = 0; i < c->periods[c->current_period]->n_subtitles; i++) {
+    //     rep = c->periods[c->current_period]->subtitles[i];
+    //     av_program_add_stream_index(s, 0, rep->stream_index);
+    //     rep->assoc_stream = s->streams[rep->stream_index];
+    //     move_metadata(rep->assoc_stream, "id", &rep->id);
+    //     move_metadata(rep->assoc_stream, "language", &rep->lang);
+    // }
 
     return 0;
 fail:
@@ -2181,12 +2429,12 @@ static int dash_read_packet(AVFormatContext *s, AVPacket *pkt)
     struct representation *cur = NULL;
     struct representation *rep = NULL;
 
-    recheck_discard_flags(s, c->videos, c->n_videos);
-    recheck_discard_flags(s, c->audios, c->n_audios);
-    recheck_discard_flags(s, c->subtitles, c->n_subtitles);
+    recheck_discard_flags(s, c->periods[c->current_period]->videos, c->periods[c->current_period]->n_videos);
+    recheck_discard_flags(s, c->periods[c->current_period]->audios, c->periods[c->current_period]->n_audios);
+    recheck_discard_flags(s, c->periods[c->current_period]->subtitles, c->periods[c->current_period]->n_subtitles);
 
-    for (i = 0; i < c->n_videos; i++) {
-        rep = c->videos[i];
+    for (i = 0; i < c->periods[c->current_period]->n_videos; i++) {
+        rep = c->periods[c->current_period]->videos[i];
         if (!rep->ctx)
             continue;
         if (!cur || rep->cur_timestamp < mints) {
@@ -2194,8 +2442,8 @@ static int dash_read_packet(AVFormatContext *s, AVPacket *pkt)
             mints = rep->cur_timestamp;
         }
     }
-    for (i = 0; i < c->n_audios; i++) {
-        rep = c->audios[i];
+    for (i = 0; i < c->periods[c->current_period]->n_audios; i++) {
+        rep = c->periods[c->current_period]->audios[i];
         if (!rep->ctx)
             continue;
         if (!cur || rep->cur_timestamp < mints) {
@@ -2204,8 +2452,8 @@ static int dash_read_packet(AVFormatContext *s, AVPacket *pkt)
         }
     }
 
-    for (i = 0; i < c->n_subtitles; i++) {
-        rep = c->subtitles[i];
+    for (i = 0; i < c->periods[c->current_period]->n_subtitles; i++) {
+        rep = c->periods[c->current_period]->subtitles[i];
         if (!rep->ctx)
             continue;
         if (!cur || rep->cur_timestamp < mints) {
@@ -2217,6 +2465,38 @@ static int dash_read_packet(AVFormatContext *s, AVPacket *pkt)
     if (!cur) {
         return AVERROR_INVALIDDATA;
     }
+
+    // multi-period support
+    if (cur->cur_seq_no >= cur->last_seq_no) {
+        if (c->current_period < c->n_periods - 1) { 
+            c->current_period++;
+            for (i = 0; i < c->periods[c->current_period]->n_videos; ++i) {
+                c->periods[c->current_period]->videos[i]->cur_timestamp = cur->cur_timestamp;
+            }
+            for (i = 0; i < c->periods[c->current_period]->n_audios; ++i) {
+                c->periods[c->current_period]->audios[i]->cur_timestamp = cur->cur_timestamp;
+            }
+            for (i = 0; i < c->periods[c->current_period]->n_subtitles; ++i) {
+                c->periods[c->current_period]->subtitles[i]->cur_timestamp = cur->cur_timestamp;
+            }
+            open_streams(s); // NOTE: upper layers' stream state maybe updated.
+            cur = NULL;
+
+            if (c->periods[c->current_period]->n_videos > 0) {
+                cur = c->periods[c->current_period]->videos[0];
+            } else if (c->periods[c->current_period]->n_audios > 0) {
+                cur = c->periods[c->current_period]->audios[0];
+            } else if (c->periods[c->current_period]->n_subtitles > 0) {
+                cur = c->periods[c->current_period]->subtitles[0];
+            }
+            
+            if (!cur) {
+                return AVERROR_INVALIDDATA;
+            }
+        }
+    }
+
+
     while (!ff_check_interrupt(c->interrupt_callback) && !ret) {
         ret = av_read_frame(cur->ctx, pkt);
         if (ret >= 0) {
@@ -2241,9 +2521,7 @@ static int dash_close(AVFormatContext *s)
     DASHContext *c = s->priv_data;
     free(c->video_abr);
     free(c->audio_abr);
-    free_audio_list(c);
-    free_video_list(c);
-    free_subtitle_list(c);
+    free_period_list(c);
     av_dict_free(&c->avio_opts);
     av_freep(&c->base_url);
     return 0;
@@ -2301,6 +2579,15 @@ set_seq_num:
                (int64_t)pls->cur_seq_no);
     } else if (pls->fragment_duration > 0) {
         pls->cur_seq_no = pls->first_seq_no + ((seek_pos_msec * pls->fragment_timescale) / pls->fragment_duration) / 1000;
+    } else if (pls->n_fragments > 0 && pls->fragments[0]->duration >= 0) {
+        // for webm, duration is saved in struct fragment
+        for (i = 0; i < pls->n_fragments; ++i) {
+            if (seek_pos_msec <= pls->fragments[i]->duration * 1000) {
+                pls->cur_seq_no = pls->first_seq_no + i;
+                break;
+            }
+            seek_pos_msec -= pls->fragments[i]->duration * 1000;
+        }
     } else {
         av_log(pls->parent, AV_LOG_ERROR, "dash_seek missing timeline or fragment_duration\n");
         pls->cur_seq_no = pls->first_seq_no;
@@ -2315,7 +2602,7 @@ set_seq_num:
 
 static int dash_read_seek(AVFormatContext *s, int stream_index, int64_t timestamp, int flags)
 {
-    int ret = 0, i;
+    int ret = 0, i, target_period = -1;
     DASHContext *c = s->priv_data;
     int64_t seek_pos_msec = av_rescale_rnd(timestamp, 1000,
                                            s->streams[stream_index]->time_base.den,
@@ -2323,19 +2610,33 @@ static int dash_read_seek(AVFormatContext *s, int stream_index, int64_t timestam
                                            AV_ROUND_DOWN : AV_ROUND_UP);
     if ((flags & AVSEEK_FLAG_BYTE) || c->is_live)
         return AVERROR(ENOSYS);
+    
+    /* Find which period seek_pos exists */
+    for (i = 0; i < c->n_periods; ++i) {
+        if (seek_pos_msec <= c->periods[i]->period_duration * 1000) {
+            target_period = i;
+            break;
+        } else {
+            seek_pos_msec -= c->periods[i]->period_duration * 1000;
+        }
+    }
+    if (target_period < 0) {
+        av_log(s, AV_LOG_ERROR, "dash seek failed to find correct period\n");
+        return AVERROR(ENOSYS);
+    }
 
     /* Seek in discarded streams with dry_run=1 to avoid reopening them */
-    for (i = 0; i < c->n_videos; i++) {
+    for (i = 0; i < c->periods[target_period]->n_videos; i++) {
         if (!ret)
-            ret = dash_seek(s, c->videos[i], seek_pos_msec, flags, !c->videos[i]->ctx);
+            ret = dash_seek(s, c->periods[target_period]->videos[i], seek_pos_msec, flags, !c->periods[target_period]->videos[i]->ctx);
     }
-    for (i = 0; i < c->n_audios; i++) {
+    for (i = 0; i < c->periods[target_period]->n_audios; i++) {
         if (!ret)
-            ret = dash_seek(s, c->audios[i], seek_pos_msec, flags, !c->audios[i]->ctx);
+            ret = dash_seek(s, c->periods[target_period]->audios[i], seek_pos_msec, flags, !c->periods[target_period]->audios[i]->ctx);
     }
-    for (i = 0; i < c->n_subtitles; i++) {
+    for (i = 0; i < c->periods[target_period]->n_subtitles; i++) {
         if (!ret)
-            ret = dash_seek(s, c->subtitles[i], seek_pos_msec, flags, !c->subtitles[i]->ctx);
+            ret = dash_seek(s, c->periods[target_period]->subtitles[i], seek_pos_msec, flags, !c->periods[target_period]->subtitles[i]->ctx);
     }
 
     return ret;
@@ -2361,16 +2662,22 @@ static int dash_probe(const AVProbeData *p)
 }
 
 static int handle_webm_segmentbase(char* url, DASHContext* c, struct representation* rep, xmlNodePtr base) {
-    if (!c || !url || !base) return -1;
-    
     AVDictionary *opts1 = NULL, *opts2 = NULL;
     AVFormatContext *init = NULL, *cue = NULL;
+    xmlNodePtr init_node = NULL;
+    struct fragment* init_seg = NULL, *cue_seg = NULL, *seg;
+    int segment_start = -1, timescale, err;
+    double segment_duration, dur;
+    char range_val[50];
+    CuePosList* next_cue = NULL, *cur_cue = NULL, *cue_head = NULL;
+
+    if (!c || !url || !base) return -1;
     
-    xmlNodePtr init_node = xmlFirstElementChild(base);
+    init_node = xmlFirstElementChild(base);
     if (!init_node) return -1;
 
-    struct fragment* init_seg = get_Fragment(xmlGetProp(init_node, "range"));
-    struct fragment* cue_seg = get_Fragment(xmlGetProp(base, "indexRange"));
+    init_seg = get_Fragment(xmlGetProp(init_node, "range"));
+    cue_seg = get_Fragment(xmlGetProp(base, "indexRange"));
 
     // Parse init segment to get SegmentStart
     init_seg->url = url;
@@ -2380,8 +2687,14 @@ static int handle_webm_segmentbase(char* url, DASHContext* c, struct representat
     
     init = avformat_alloc_context();
     avio_open2(&init->pb, url, AVIO_FLAG_READ, c->interrupt_callback, &opts1);
-    int segment_start = dashdec_webm_parse_init(init);
-    av_log(c, AV_LOG_DEBUG, "segment start=%d \n", segment_start);
+    err = dashdec_webm_parse_init(init, &segment_start, &timescale,  &segment_duration);
+    if (err < 0) {
+        free(init_seg);
+        free(cue_seg);
+        free(init);
+        return -1;
+    }
+    av_log(c, AV_LOG_INFO, "segment start=%d seg_duration=%f timescale=%d\n", segment_start, segment_duration, timescale);
 
     // Parse cue segment to get Cues
     av_dict_set_int(&opts2, "offset", cue_seg->url_offset, 0);
@@ -2389,33 +2702,34 @@ static int handle_webm_segmentbase(char* url, DASHContext* c, struct representat
     av_dict_copy(&opts2, c->avio_opts, 0);
     cue = avformat_alloc_context();
     avio_open2(&cue->pb, url, AVIO_FLAG_READ, c->interrupt_callback, &opts2);
-    CuePosList* next_cue = dashdec_webm_parse_cue(cue);
+    next_cue = dashdec_webm_parse_cue(cue);
     
     // Transform CuePosList into segment list in representation.
     if (!next_cue) return -1;
-    CuePosList* cur_cue = next_cue, *cue_head = next_cue;
+    cur_cue = next_cue;
+    cue_head = next_cue;
     do {
         next_cue = next_cue->next;
         if (next_cue) {
             cur_cue->end = next_cue->begin - 1 + segment_start;
+            dur = (float)(next_cue->cue_time - cur_cue->cue_time) / timescale;
         } else {
-            cur_cue->end = cue_seg->url_offset - 1; // TODO(pjl): currently assume cue box is just behind cluster box.
+            cur_cue->end = cue_seg->url_offset - 1; // NOTE: currently assume cue box is just behind cluster box.
+            dur = (float)(segment_duration - cur_cue->cue_time) / timescale;
         }
+        sprintf(range_val, "%lu-%lu", cur_cue->begin + segment_start, cur_cue->end);
         
-        char range_val[50];
-        sprintf(range_val, "%lld-%lld", cur_cue->begin + segment_start, cur_cue->end);
-
-        struct fragment *seg = get_Fragment(range_val);
+        seg = get_Fragment(range_val);
+        seg->duration = dur;
         if (!seg) return -1;
         seg->url = url;
-        int err = av_dynarray_add_nofree(&rep->fragments, &rep->n_fragments, seg);
+        err = av_dynarray_add_nofree(&rep->fragments, &rep->n_fragments, seg);
         if (err < 0) {
             free_fragment(&seg);
             return -1;
         }
         cur_cue = next_cue;
     } while (next_cue);
-    
     init_seg->size += 1;
     rep->init_section = init_seg;
     
