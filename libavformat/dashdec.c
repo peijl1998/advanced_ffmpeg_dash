@@ -1527,9 +1527,9 @@ static int64_t calc_max_seg_no(struct representation *pls, DASHContext *c)
         num = pls->first_seq_no + (((get_current_time_in_sec() - c->availability_start_time)) * pls->fragment_timescale)  / pls->fragment_duration;
     } else if (pls->fragment_duration) {
         if (c->periods[c->current_period]->period_duration > 0) {
-            num = pls->first_seq_no + av_rescale_rnd(1, c->periods[c->current_period]->period_duration * pls->fragment_timescale, pls->fragment_duration, AV_ROUND_UP);
+            num = pls->first_seq_no + av_rescale_rnd(1, c->periods[c->current_period]->period_duration * pls->fragment_timescale, pls->fragment_duration, AV_ROUND_UP) - 1;
         } else {
-            num = pls->first_seq_no + av_rescale_rnd(1, c->media_presentation_duration * pls->fragment_timescale, pls->fragment_duration, AV_ROUND_UP);
+            num = pls->first_seq_no + av_rescale_rnd(1, c->media_presentation_duration * pls->fragment_timescale, pls->fragment_duration, AV_ROUND_UP) - 1;
         }
     }
     return num;
