@@ -4522,15 +4522,11 @@ fail:
 }
 
 void dashdec_webm_free(CuePosList* c) {
-    if (!c) return ;
-    CuePosList* first = c;
-    c = c->next;
     while (c) {
-        free(first);
-        first = c;
+        CuePosList* tmp = c;
         c = c->next;
+        free(tmp);
     }
-    if (first) free(first);
 }
 /////////////////////////////////////
 
