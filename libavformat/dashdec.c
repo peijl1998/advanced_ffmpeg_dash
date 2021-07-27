@@ -88,12 +88,12 @@ static void init_dash_abr(DASHContext* c) {
     c->video_abr->max_history_len = 2;
     c->video_abr->throughput_history = NULL;
     c->video_abr->buffer_level = 0;
-    c->video_abr->algorithm = BBA_0; // SimpleThroughput; //AlwaysFirst;
+    c->video_abr->algorithm = SimpleThroughput; //AlwaysFirst;
     
     c->audio_abr->max_history_len = 2;
     c->audio_abr->throughput_history = NULL;
     c->audio_abr->buffer_level = 0;
-    c->audio_abr->algorithm = BBA_0; //SimpleThroughput; //AlwaysFirst;
+    c->audio_abr->algorithm = SimpleThroughput; //AlwaysFirst;
 
     c->dashdec_add_metric = dashdec_add_metric;
     c->dashdec_get_stream = dashdec_get_stream;
@@ -2456,7 +2456,7 @@ set_seq_num:
 
 static int dash_read_seek(AVFormatContext *s, int stream_index, int64_t timestamp, int flags)
 {
-    int ret = 0, i, target_period = -1;
+    int ret = 0, i, target_period = 0;
     DASHContext *c = s->priv_data;
     int64_t seek_pos_msec = av_rescale_rnd(timestamp, 1000,
                                            s->streams[stream_index]->time_base.den,
@@ -2465,25 +2465,26 @@ static int dash_read_seek(AVFormatContext *s, int stream_index, int64_t timestam
     if ((flags & AVSEEK_FLAG_BYTE) || c->is_live)
         return AVERROR(ENOSYS);
     
-    /* Find which period seek_pos exists */
-    for (i = 0; i < c->n_periods; ++i) {
-        if (seek_pos_msec <= c->periods[i]->period_duration * 1000) {
-            target_period = i;
-            break;
-        } else {
-            seek_pos_msec -= c->periods[i]->period_duration * 1000;
+    /* Find which period seek_pos exists for multi-period*/
+    if (c->n_periods > 1) {
+        for (i = 0; i < c->n_periods; ++i) {
+            if (seek_pos_msec <= c->periods[i]->period_duration * 1000) {
+                target_period = i;
+                break;
+            } else {
+                seek_pos_msec -= c->periods[i]->period_duration * 1000;
+            }
+        }
+        if (target_period < 0) {
+            av_log(s, AV_LOG_ERROR, "dash seek failed to find correct period\n");
+            return AVERROR(ENOSYS);
+        }
+        if (target_period != c->current_period) {
+            av_log(s, AV_LOG_INFO, "switch period from %d to %d\n", c->current_period, target_period);
+            c->current_period = target_period;
+            open_streams(s);
         }
     }
-    if (target_period < 0) {
-        av_log(s, AV_LOG_ERROR, "dash seek failed to find correct period\n");
-        return AVERROR(ENOSYS);
-    }
-    if (target_period != c->current_period) {
-        av_log(s, AV_LOG_INFO, "switch period from %d to %d\n", c->current_period, target_period);
-        c->current_period = target_period;
-        open_streams(s);
-    }
-
     /* Seek in discarded streams with dry_run=1 to avoid reopening them */
     for (i = 0; i < c->periods[target_period]->n_videos; i++) {
         if (!ret)
