@@ -99,8 +99,8 @@ typedef struct Period {
     int n_subtitles;
     struct representation **subtitles;
     
-    uint64_t period_duration;
-    uint64_t period_start;
+    int period_duration;
+    int period_start;
 
     char *adaptionset_lang;
 

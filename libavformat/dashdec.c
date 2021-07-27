@@ -1218,7 +1218,8 @@ static int parse_manifest_period(AVFormatContext* s,
         attr = attr->next;
         xmlFree(val);
     }
-    if (pd->period_duration == -1) {
+    if (c->n_periods > 1 && pd->period_duration == -1 ) {
+        av_log(s, AV_LOG_ERROR, "missing duration attr in multi-period\n");
         free(pd);
         return -1;
     }
@@ -2610,7 +2611,7 @@ static int handle_fmp4_segmentbase(char* url, DASHContext* c, struct representat
     int err;
     uint64_t moov_end = -1;
     FMP4Segment* seg_head = NULL, *cursor;
-
+ 
     if (!c || !url || !base) {
         return -1;
     }
