@@ -99,13 +99,6 @@ static void init_dash_abr(DASHContext* c) {
     c->dashdec_get_stream = dashdec_get_stream;
 }
 
-static void copy_metadata(AVStream *st, const char *key, char **value)
-{
-    if (*value) {
-        av_dict_set(&st->metadata, key, *value, AV_DICT_DONT_STRDUP_VAL);
-    }
-}
-
 static int handle_webm_segmentbase(char* url, DASHContext* c, struct representation* rep, xmlNodePtr base);
 static int handle_fmp4_segmentbase(char* url, DASHContext* c, struct representation* rep, xmlNodePtr base);
 /////////////////////////////////////
@@ -1848,7 +1841,7 @@ restart:
             goto restart;
         }
     }
-    
+
     if (v->init_sec_buf_read_offset < v->init_sec_data_len) {
         /* Push init section out first before first actual fragment */
         int copy_size = FFMIN(v->init_sec_data_len - v->init_sec_buf_read_offset, buf_size);
@@ -1867,8 +1860,9 @@ restart:
         goto end;
     }
     ret = read_from_url(v, v->cur_seg, buf, buf_size);
-    if (ret > 0)
+    if (ret > 0) {
         goto end;
+    }
 
     if (c->is_live || v->cur_seq_no < v->last_seq_no) {
         if (!v->is_restart_needed)
@@ -1931,7 +1925,7 @@ static int reopen_demux_for_component(AVFormatContext *s, struct representation 
     AVDictionary  *in_fmt_opts = NULL;
     uint8_t *avio_ctx_buffer  = NULL;
     int ret = 0, i;
-    
+   
     if (pls->ctx) {
         close_demux_for_component(pls);
     }
@@ -2119,6 +2113,8 @@ static int open_streams(AVFormatContext* s) {
             if (ret < 0)
                 goto fail;
         }
+        rep->cur_seg_offset = 0;
+        rep->init_sec_buf_read_offset = 0;
         ret = open_demux_for_component(s, rep);
         if (ret)
             goto fail;
@@ -2137,8 +2133,9 @@ static int open_streams(AVFormatContext* s) {
             if (ret < 0)
                 goto fail;
         }
+        rep->cur_seg_offset = 0;
+        rep->init_sec_buf_read_offset = 0;
         ret = open_demux_for_component(s, rep);
-
         if (ret)
             goto fail;
         rep->stream_index = stream_index;
@@ -2156,8 +2153,9 @@ static int open_streams(AVFormatContext* s) {
             if (ret < 0)
                 goto fail;
         }
+        rep->cur_seg_offset = 0;
+        rep->init_sec_buf_read_offset = 0;
         ret = open_demux_for_component(s, rep);
-
         if (ret)
             goto fail;
         rep->stream_index = stream_index;
@@ -2182,8 +2180,7 @@ static int open_streams(AVFormatContext* s) {
         rep->assoc_stream = s->streams[rep->stream_index];
         if (rep->bandwidth > 0)
             av_dict_set_int(&rep->assoc_stream->metadata, "variant_bitrate", rep->bandwidth, 0);
-        // move_metadata(rep->assoc_stream, "id", &rep->id);
-        copy_metadata(rep->assoc_stream, "id", &rep->id);
+        move_metadata(rep->assoc_stream, "id", &rep->id);
     }
     for (i = 0; i < c->periods[c->current_period]->n_audios; i++) {
         rep = c->periods[c->current_period]->audios[i];
@@ -2191,19 +2188,15 @@ static int open_streams(AVFormatContext* s) {
         rep->assoc_stream = s->streams[rep->stream_index];
         if (rep->bandwidth > 0)
             av_dict_set_int(&rep->assoc_stream->metadata, "variant_bitrate", rep->bandwidth, 0);
-        // move_metadata(rep->assoc_stream, "id", &rep->id);
-        // move_metadata(rep->assoc_stream, "language", &rep->lang);
-        copy_metadata(rep->assoc_stream, "id", &rep->id);
-        copy_metadata(rep->assoc_stream, "language", &rep->lang);
+        move_metadata(rep->assoc_stream, "id", &rep->id);
+        move_metadata(rep->assoc_stream, "language", &rep->lang);
     }
     for (i = 0; i < c->periods[c->current_period]->n_subtitles; i++) {
         rep = c->periods[c->current_period]->subtitles[i];
         av_program_add_stream_index(s, 0, rep->stream_index);
         rep->assoc_stream = s->streams[rep->stream_index];
-        // move_metadata(rep->assoc_stream, "id", &rep->id);
-        // move_metadata(rep->assoc_stream, "language", &rep->lang);
-        copy_metadata(rep->assoc_stream, "id", &rep->id);
-        copy_metadata(rep->assoc_stream, "language", &rep->lang);
+        move_metadata(rep->assoc_stream, "id", &rep->id);
+        move_metadata(rep->assoc_stream, "language", &rep->lang);
     }
 
     return ret;
@@ -2322,17 +2315,9 @@ static int dash_read_packet(AVFormatContext *s, AVPacket *pkt)
 
     // multi-period support
     if (cur->cur_seq_no >= cur->last_seq_no) {
-        if (c->current_period < c->n_periods - 1) { 
+        if (c->current_period < c->n_periods - 1) {
+            av_log(c, AV_LOG_INFO, "period changed from %d to %d\n", c->current_period, c->current_period + 1);
             c->current_period++;
-            for (i = 0; i < c->periods[c->current_period]->n_videos; ++i) {
-                c->periods[c->current_period]->videos[i]->cur_timestamp = cur->cur_timestamp;
-            }
-            for (i = 0; i < c->periods[c->current_period]->n_audios; ++i) {
-                c->periods[c->current_period]->audios[i]->cur_timestamp = cur->cur_timestamp;
-            }
-            for (i = 0; i < c->periods[c->current_period]->n_subtitles; ++i) {
-                c->periods[c->current_period]->subtitles[i]->cur_timestamp = cur->cur_timestamp;
-            }
             open_streams(s); // NOTE: upper layers' stream state maybe updated.
             cur = NULL;
 
@@ -2355,6 +2340,7 @@ static int dash_read_packet(AVFormatContext *s, AVPacket *pkt)
         ret = av_read_frame(cur->ctx, pkt);
         if (ret >= 0) {
             /* If we got a packet, return it */
+            pkt->pts += av_rescale(c->periods[c->current_period]->period_start, cur->ctx->streams[0]->time_base.den, (int64_t)cur->ctx->streams[0]->time_base.num);
             cur->cur_timestamp = av_rescale(pkt->pts, (int64_t)cur->ctx->streams[0]->time_base.num * 90000, cur->ctx->streams[0]->time_base.den);
             pkt->stream_index = cur->stream_index;
             return 0;
