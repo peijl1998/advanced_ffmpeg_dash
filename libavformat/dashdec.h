@@ -101,6 +101,7 @@ typedef struct Period {
     
     int period_duration;
     int period_start;
+    int cur_seg_eof;
 
     char *adaptionset_lang;
 

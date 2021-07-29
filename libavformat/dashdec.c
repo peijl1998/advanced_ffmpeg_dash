@@ -1840,6 +1840,7 @@ restart:
             v->cur_seq_no++;
             goto restart;
         }
+        c->periods[c->current_period]->cur_seg_eof = 0;
     }
 
     if (v->init_sec_buf_read_offset < v->init_sec_data_len) {
@@ -1863,7 +1864,7 @@ restart:
     if (ret > 0) {
         goto end;
     }
-
+    c->periods[c->current_period]->cur_seg_eof = 1;
     if (c->is_live || v->cur_seq_no < v->last_seq_no) {
         if (!v->is_restart_needed)
             v->cur_seq_no++;
@@ -2314,7 +2315,7 @@ static int dash_read_packet(AVFormatContext *s, AVPacket *pkt)
     }
 
     // multi-period support
-    if (cur->cur_seq_no >= cur->last_seq_no) {
+    if (cur->cur_seq_no >= cur->last_seq_no && c->periods[c->current_period]->cur_seg_eof == 1) {
         if (c->current_period < c->n_periods - 1) {
             av_log(c, AV_LOG_INFO, "period changed from %d to %d\n", c->current_period, c->current_period + 1);
             c->current_period++;
@@ -2453,6 +2454,7 @@ static int dash_read_seek(AVFormatContext *s, int stream_index, int64_t timestam
     
     /* Find which period seek_pos exists for multi-period*/
     if (c->n_periods > 1) {
+        target_period = -1;
         for (i = 0; i < c->n_periods; ++i) {
             if (seek_pos_msec <= c->periods[i]->period_duration * 1000) {
                 target_period = i;
