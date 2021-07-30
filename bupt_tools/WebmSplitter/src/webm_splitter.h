@@ -21,7 +21,7 @@ class SimpleWebmParser : public webm::Callback {
         ~SimpleWebmParser();
 
         // For User
-        void Parse(FILE* file);
+        void Parse(const std::vector<std::uint8_t>& buffer);
         uint64_t GetInfoDuration();
         uint64_t GetInfoTimescale();
         uint64_t GetSegmentStart();

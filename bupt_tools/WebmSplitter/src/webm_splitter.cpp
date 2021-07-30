@@ -35,8 +35,8 @@ Status SimpleWebmParser::OnSegmentBegin(const ElementMetadata& metadata, Action*
     return Status(Status::kOkCompleted);
 }
 
-void SimpleWebmParser::Parse(FILE* file) {
-    FileReader reader(file);
+void SimpleWebmParser::Parse(const std::vector<std::uint8_t>& buffer) {
+    BufferReader reader(buffer);
     WebmParser parser;
     Status status = parser.Feed(this, &reader);
 }
@@ -61,29 +61,75 @@ const std::vector<Cue>& SimpleWebmParser::GetCues() {
     return this->cues;
 }
 
+void write_single_file(char* prefix, int idx, std::uint64_t start, std::uint64_t end, std::vector<std::uint8_t>& buffer) {
+    char val[50];
+    if (idx != -1)
+        sprintf(val, "%s_%d.webm", prefix, idx);
+    else
+        sprintf(val, "%s_init.webm", prefix);
+    FILE* file = std::fopen(val, "wb");
+    for (int i = start; i < end; ++i) {
+        fputc(buffer[i], file);
+    }
+    std::fclose(file);
+}
+
 int main(int argc, char* argv[]) {
-    if (argc != 2) {
+    if (argc != 3) {
       std::cerr << "Input Error\n";
       return EXIT_FAILURE;
     }
     
+    // Parsing
     FILE* file = std::fopen(argv[1], "rb");
     if (!file) {
       std::cerr << "File cannot be opened\n";
       return EXIT_FAILURE;
     }
     
+    std::vector<std::uint8_t> buffer;
+    uint8_t c;
+    while (!std::feof(file)) {
+        c = fgetc(file);
+        buffer.push_back(c);
+    }
+
     SimpleWebmParser* parser = new SimpleWebmParser();
-    parser->Parse(file);
+    parser->Parse(buffer);
 
     std::cout << " Duration = " << parser->GetInfoDuration() \
               << " Timescale = " << parser->GetInfoTimescale() \
               << " SegmentStart = " << parser->GetSegmentStart() \
               << " SegmentEnd = " << parser->GetSegmentEnd() << std::endl;
     
-    for (auto item : parser->GetCues()) {
-        std::cout << "time=" << item.cue_time << " pos=" << item.cue_pos << std::endl;
+    // for (auto item : parser->GetCues()) {
+    //     std::cout << "time=" << item.cue_time << " pos=" << item.cue_pos << std::endl;
+    // }
+    
+    // Writing
+    std::uint64_t timescale = 1000000000 / parser->GetInfoTimescale();
+    std::uint64_t segment_start = parser->GetSegmentStart();
+    std::uint64_t segment_end = parser->GetSegmentEnd();
+    double total_duration = 0;
+    auto cues = parser->GetCues();
+    double duration = parser->GetInfoDuration();
+    write_single_file(argv[2], -1, 0, cues[0].cue_pos + segment_start, buffer);
+    for (int i = 0; i < cues.size(); ++i) {
+        int start = cues[i].cue_pos + segment_start;
+        int end;
+        if (i != cues.size() - 1) {
+            total_duration += (float)(cues[i + 1].cue_time - cues[i].cue_time) / timescale;
+            end = cues[i + 1].cue_pos + segment_start - 1;
+        } else {
+            total_duration += (float)(duration - cues[i].cue_time) / timescale;
+            end = segment_end - 1;
+        }
+        std::cout << argv[2] << " " << i << " " << start << " " << end << std::endl;
+        write_single_file(argv[2], i, start, end, buffer);
     }
 
+    std::cout << "Duration total=" << total_duration << "s, avg=" << total_duration / cues.size() << "s" << std::endl;
+
+    std::fclose(file);
     return 0;
 }
