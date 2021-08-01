@@ -2116,6 +2116,7 @@ static int open_streams(AVFormatContext* s) {
         }
         rep->cur_seg_offset = 0;
         rep->init_sec_buf_read_offset = 0;
+         ff_format_io_close(rep->parent, &rep->input);
         ret = open_demux_for_component(s, rep);
         if (ret)
             goto fail;
@@ -2136,6 +2137,7 @@ static int open_streams(AVFormatContext* s) {
         }
         rep->cur_seg_offset = 0;
         rep->init_sec_buf_read_offset = 0;
+        ff_format_io_close(rep->parent, &rep->input);
         ret = open_demux_for_component(s, rep);
         if (ret)
             goto fail;
@@ -2156,6 +2158,7 @@ static int open_streams(AVFormatContext* s) {
         }
         rep->cur_seg_offset = 0;
         rep->init_sec_buf_read_offset = 0;
+        ff_format_io_close(rep->parent, &rep->input);
         ret = open_demux_for_component(s, rep);
         if (ret)
             goto fail;
