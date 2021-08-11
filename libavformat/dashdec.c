@@ -1388,7 +1388,7 @@ cleanup:
     if (close_in) {
         avio_close(in);
     }
-    c->current_period = 0; // TODO(pjl): check whether it's right for live profile if mpd is refreshed?
+    c->current_period = 0;
     
     // fill in period parameters by auto-reference.
     // duration is present for each period
@@ -1519,7 +1519,6 @@ static void move_segments(struct representation *rep_src, struct representation 
     }
 }
 
-// TODO(pjl): live profiles + multi period need reconsider. (not support yet)
 static int refresh_manifest(AVFormatContext *s)
 {
     int ret = 0, i;
@@ -1541,6 +1540,7 @@ static int refresh_manifest(AVFormatContext *s)
     
 
     c->base_url = NULL;
+    c->n_periods = 0;
     c->periods[c->current_period]->n_videos = 0;
     c->periods[c->current_period]->videos = NULL;
     c->periods[c->current_period]->n_audios = 0;
