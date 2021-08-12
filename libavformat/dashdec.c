@@ -1320,6 +1320,8 @@ static int parse_manifest(AVFormatContext *s, const char *url, AVIOContext *in)
         }
         if (!av_strcasecmp(val, "dynamic"))
             c->is_live = 1;
+        else
+            c->is_live = 0;
         xmlFree(val);
 
         attr = node->properties;
@@ -1537,7 +1539,6 @@ static int refresh_manifest(AVFormatContext *s)
         av_log(c, AV_LOG_ERROR, "multi period live profile not support yet\n");
         goto finish;
     }
-    
 
     c->base_url = NULL;
     c->n_periods = 0;
@@ -1548,6 +1549,7 @@ static int refresh_manifest(AVFormatContext *s)
     c->periods[c->current_period]->n_subtitles = 0;
     c->periods[c->current_period]->subtitles = NULL;
     ret = parse_manifest(s, s->url, NULL);
+
     if (ret)
         goto finish;
     
@@ -1837,7 +1839,13 @@ restart:
                 goto end;
             }
             av_log(v->parent, AV_LOG_WARNING, "Failed to open fragment of playlist\n");
-            v->cur_seq_no++;
+
+            /* BUPT: hack, for live profile, if requested segment is not ready in server, cur_seq_no++ will cause many invalid request. */
+            if (!c->is_live) {
+                v->cur_seq_no++;
+            } else {
+                av_usleep(100 * 1000);
+            }
             goto restart;
         }
         c->periods[c->current_period]->cur_seg_eof = 0;
