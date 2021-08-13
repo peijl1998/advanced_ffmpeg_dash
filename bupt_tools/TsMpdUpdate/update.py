@@ -48,6 +48,10 @@ def get_rep(reps):
         s += '<Representation id="{}" mimeType="{}" bandwidth="{}">\n'.format(rep["id"], rep["type"], rep["bw"])
         
         s += '<SegmentTemplate timescale="1000" media="{}_$Number$.ts" startNumber="{}">'.format(rep["name"], rep["start"])
+        s += '<SegmentTimeline>\n'
+        s += '<S t="0" d="10000" r="{}" />\n'.format(rep["start"] + 1)
+        s += '</SegmentTimeline>\n'
+        
         s+= '</SegmentTemplate>' 
         s += '</Representation>\n'
 

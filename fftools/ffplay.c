@@ -2781,12 +2781,15 @@ static void abr_update(enum AVMediaType type, AVFormatContext* ic, VideoState* i
     int buffer_max = 240, buffer_r = 90, buffer_c = 126;
     
     if (!dc) av_log(is, AV_LOG_ERROR, "dash context is null\n");
+    // for live profile, maybe no period in DC during refreshing...
+    while (dc->n_periods == 0) {
+        av_usleep(500 * 1000);
+    }
     // NOTE: assume stream_index is sorted by VIDEO/AUDIO/SUBTITLE
     if (type == AVMEDIA_TYPE_VIDEO) {
         cur_rep = dc->periods[dc->current_period]->videos[st_index[type]];
         buffer_level = is->videoq.size;
     } else if (type == AVMEDIA_TYPE_AUDIO) {
-        // TODO(pjl): check is it right?
         cur_rep = dc->periods[dc->current_period]->audios[st_index[type] - dc->periods[dc->current_period]->n_videos];
         buffer_level = is->audioq.size;
     }
