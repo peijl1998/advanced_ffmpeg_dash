@@ -1549,7 +1549,7 @@ static int refresh_manifest(AVFormatContext *s)
     c->periods[c->current_period]->n_subtitles = 0;
     c->periods[c->current_period]->subtitles = NULL;
     ret = parse_manifest(s, s->url, NULL);
-
+    av_log(c, AV_LOG_INFO, "manifest has been refreshed\n");
     if (ret)
         goto finish;
     
