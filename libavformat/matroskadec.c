@@ -1510,8 +1510,8 @@ static int ebml_parse(MatroskaDemuxContext *matroska,
         else if (res == AVERROR(EIO))
             av_log(matroska->ctx, AV_LOG_ERROR, "Read error\n");
         else if (res == AVERROR_EOF) {
-            // av_log(matroska->ctx, AV_LOG_ERROR, "File ended prematurely\n");
-            // res = AVERROR(EIO);  //BUPT FIXME(pjl): how to handle this situation?
+            av_log(matroska->ctx, AV_LOG_ERROR, "File ended prematurely\n");
+            res = AVERROR(EIO);
         }
 
         return res;

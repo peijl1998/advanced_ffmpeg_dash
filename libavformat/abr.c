@@ -104,8 +104,7 @@ void abr_add_metric(ABRContext* ac, float tpt, float buffer_level,
     // from Mbps to bps
     tpt = tpt * 1024 * 1024;
     
-
-    // TODO(pjl): array can be optimized by queue here. implement it later.
+    // TODO: array can be optimized by queue here. need to be implemented.
     if (!ac->throughput_history) {
         ac->throughput_history = (float*)malloc(sizeof(float) * ac->max_history_len);
         for (int i = 0; i < ac->max_history_len; ++i) {

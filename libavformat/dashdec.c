@@ -2565,7 +2565,7 @@ static int handle_webm_segmentbase(char* url, DASHContext* c, struct representat
     avio_open2(&cue->pb, url, AVIO_FLAG_READ, c->interrupt_callback, &opts2);
     next_cue = dashdec_webm_parse_cue(cue);
     
-    // Transform CuePosList into segment list in representation.
+    // Convert CuePosList into segment list in representation.
     if (!next_cue) return -1;
     cur_cue = next_cue;
     cue_head = next_cue;
@@ -2594,7 +2594,6 @@ static int handle_webm_segmentbase(char* url, DASHContext* c, struct representat
     rep->init_section = init_seg;
     
     // clean up
-    // TODO(pjl): check memory leak
     dashdec_webm_free(cue_head);
     free(cue_seg);
     free(init);

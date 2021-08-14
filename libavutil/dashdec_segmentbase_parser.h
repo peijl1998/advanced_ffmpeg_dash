@@ -3,9 +3,7 @@
 
 #include "libavformat/avio.h"
 
-// TODO(pjl): refactor the original code and intergrate webm/fmp4/ts segmentbase handler
-//            into this file.
-
+// TODO: webm segment base parser could also be moved here.
 
 typedef struct FMP4Segment {
     uint64_t begin;
@@ -13,7 +11,6 @@ typedef struct FMP4Segment {
     double duration;
     struct FMP4Segment* next;
 } FMP4Segment;
-
 
 
 int dashdec_fmp4_parse_init(AVIOContext* s, FMP4Segment** head, uint64_t* moov_end);

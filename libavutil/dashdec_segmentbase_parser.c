@@ -1,7 +1,6 @@
 #include "dashdec_segmentbase_parser.h"
 
 
-
 int dashdec_fmp4_parse_init(AVIOContext* pb, FMP4Segment** head, uint64_t* moov_end) {
     unsigned type, size;
     unsigned track_id, timescale, fo, ref_count;
