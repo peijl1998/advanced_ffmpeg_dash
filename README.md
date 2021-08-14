@@ -13,4 +13,4 @@ I add something new related to DASH as follows :)
   - WebmSplitter for split webm file into segments.
   - TsLiveUpdate for simulate mpeg-ts based live (also need MP4Box to convert m3u8 into mpd first)
 
-For more information, please contact me with [this email](peijl.bupt@gmail.com)
+For more information, please contact me with [this email](mailto:peijl.bupt@gmail.com)
