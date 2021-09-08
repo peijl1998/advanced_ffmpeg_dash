@@ -31,8 +31,8 @@ def get_header(begin_time, update_time):
     s += 'type="dynamic"\n'
     s += 'minimumUpdatePeriod="PT10S"\n'
     s += 'suggestedPresentationDelay="PT6S"\n'
-    s += 'availabilityStartTime="2021-08-13T05:57:10.664Z"\n'.format(begin_time[0], begin_time[1])
-    s += 'publishTime="2021-08-13T05:57:16.548Z"\n'.format(update_time[0], update_time[1])
+    s += 'availabilityStartTime="{}T{}Z"\n'.format(begin_time[0], begin_time[1])
+    s += 'publishTime="{}T0{}Z"\n'.format(update_time[0], update_time[1])
     s += 'timeShiftBufferDepth="PT2M0.0S"\n'
     s += 'maxSegmentDuration="PT10.0S"\n'
     s += 'minBufferTime="PT12.0S">\n'
