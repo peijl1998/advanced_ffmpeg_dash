@@ -2788,10 +2788,10 @@ static void abr_update(enum AVMediaType type, AVFormatContext* ic, VideoState* i
     // NOTE: assume stream_index is sorted by VIDEO/AUDIO/SUBTITLE
     if (type == AVMEDIA_TYPE_VIDEO) {
         cur_rep = dc->periods[dc->current_period]->videos[st_index[type]];
-        buffer_level = is->videoq.size;
+        buffer_level = is->pictq.size;
     } else if (type == AVMEDIA_TYPE_AUDIO) {
         cur_rep = dc->periods[dc->current_period]->audios[st_index[type] - dc->periods[dc->current_period]->n_videos];
-        buffer_level = is->audioq.size;
+        buffer_level = is->sampq.size;
     }
     if (!cur_rep->input) return ;
     url = cur_rep->input->opaque;
@@ -2800,8 +2800,8 @@ static void abr_update(enum AVMediaType type, AVFormatContext* ic, VideoState* i
     t1 = av_gettime();
     timeout = 0;
     while (http && http->http_req_end == 0) {
-        av_usleep(500 * 1000);
-        if ( (av_gettime() - t1) / 1000 > 1000 ) {
+        av_usleep(100 * 1000);
+        if ( (av_gettime() - t1) / 1000 > 5000 ) {
             timeout = 1;
             break;
         }
@@ -2815,7 +2815,7 @@ static void abr_update(enum AVMediaType type, AVFormatContext* ic, VideoState* i
     }
     
     // just for test bba-0
-    buffer_level = 150;
+    // buffer_level = 150;
     dc->dashdec_add_metric(ic, type, tpt, buffer_level, 
                            buffer_max, buffer_r, buffer_c);
     
@@ -2826,7 +2826,7 @@ static void abr_update(enum AVMediaType type, AVFormatContext* ic, VideoState* i
         st_index[type] = choosen_idx;
     }
 
-    av_log(ic, AV_LOG_WARNING, "[%lld]DASH Metric(%s): tpt=%f, buffer=%f, choosen=%d, timeout=%d, cur_bandwith=%d\n", av_gettime(),
+    av_log(ic, AV_LOG_WARNING, "[%ld]DASH Metric(%s): tpt=%f, buffer=%f, choosen=%d, timeout=%d, cur_bandwith=%d\n", av_gettime(),
             type == AVMEDIA_TYPE_VIDEO ? "video" : "audio", tpt, buffer_level, choosen_idx, timeout, cur_rep->bandwidth);
 }
 
