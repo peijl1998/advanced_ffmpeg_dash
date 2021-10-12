@@ -132,7 +132,7 @@ typedef struct PacketQueue {
     SDL_cond *cond;
 } PacketQueue;
 
-#define VIDEO_PICTURE_QUEUE_SIZE 30
+#define VIDEO_PICTURE_QUEUE_SIZE 900
 #define SUBPICTURE_QUEUE_SIZE 160
 #define SAMPLE_QUEUE_SIZE 90
 #define FRAME_QUEUE_SIZE FFMAX(SAMPLE_QUEUE_SIZE, FFMAX(VIDEO_PICTURE_QUEUE_SIZE, SUBPICTURE_QUEUE_SIZE))
@@ -2788,7 +2788,13 @@ static void abr_update(enum AVMediaType type, AVFormatContext* ic, VideoState* i
     // NOTE: assume stream_index is sorted by VIDEO/AUDIO/SUBTITLE
     if (type == AVMEDIA_TYPE_VIDEO) {
         cur_rep = dc->periods[dc->current_period]->videos[st_index[type]];
-        buffer_level = is->pictq.size;
+        // buffer_level = is->pictq.size;
+        
+        double dur = 0;
+        for (int i = 0; i < is->pictq.size; ++i) {
+            dur += is->pictq.queue[i].duration;
+        }
+        buffer_level = dur;
     } else if (type == AVMEDIA_TYPE_AUDIO) {
         cur_rep = dc->periods[dc->current_period]->audios[st_index[type] - dc->periods[dc->current_period]->n_videos];
         buffer_level = is->sampq.size;
@@ -2821,9 +2827,9 @@ static void abr_update(enum AVMediaType type, AVFormatContext* ic, VideoState* i
     
     choosen_idx = dc->dashdec_get_stream(ic, type);
     if (choosen_idx >= 0 && choosen_idx != st_index[type]) {
-        stream_component_close(is, st_index[type]);
-        stream_component_open(is, choosen_idx);
-        st_index[type] = choosen_idx;
+        // stream_component_close(is, st_index[type]);
+        // stream_component_open(is, choosen_idx);
+        // st_index[type] = choosen_idx;
     }
 
     av_log(ic, AV_LOG_WARNING, "[%ld]DASH Metric(%s): tpt=%f, buffer=%f, choosen=%d, timeout=%d, cur_bandwith=%d\n", av_gettime(),
