@@ -67,7 +67,7 @@
 
 const char program_name[] = "ffplay";
 const int program_birth_year = 2003;
-
+int will_switch = 0;
 #define MAX_QUEUE_SIZE (15 * 1024 * 1024)
 #define MIN_FRAMES 25
 #define EXTERNAL_CLOCK_MIN_FRAMES 2
@@ -132,7 +132,7 @@ typedef struct PacketQueue {
     SDL_cond *cond;
 } PacketQueue;
 
-#define VIDEO_PICTURE_QUEUE_SIZE 900
+#define VIDEO_PICTURE_QUEUE_SIZE 120
 #define SUBPICTURE_QUEUE_SIZE 160
 #define SAMPLE_QUEUE_SIZE 90
 #define FRAME_QUEUE_SIZE FFMAX(SAMPLE_QUEUE_SIZE, FFMAX(VIDEO_PICTURE_QUEUE_SIZE, SUBPICTURE_QUEUE_SIZE))
@@ -1212,7 +1212,6 @@ static void stream_component_close(VideoState *is, int stream_index)
 {
     AVFormatContext *ic = is->ic;
     AVCodecParameters *codecpar;
-
     if (stream_index < 0 || stream_index >= ic->nb_streams)
         return;
     codecpar = ic->streams[stream_index]->codecpar;
@@ -1245,7 +1244,6 @@ static void stream_component_close(VideoState *is, int stream_index)
     default:
         break;
     }
-
     ic->streams[stream_index]->discard = AVDISCARD_ALL;
     switch (codecpar->codec_type) {
     case AVMEDIA_TYPE_AUDIO:
@@ -1608,8 +1606,7 @@ retry:
             /* dequeue the picture */
             lastvp = frame_queue_peek_last(&is->pictq);
             vp = frame_queue_peek(&is->pictq);
-
-            if (vp->serial != is->videoq.serial) {
+            if (0 && vp->serial != is->videoq.serial) {
                 frame_queue_next(&is->pictq);
                 goto retry;
             }
@@ -1644,6 +1641,7 @@ retry:
                 duration = vp_duration(is, vp, nextvp);
                 if(!is->step && (framedrop>0 || (framedrop && get_master_sync_type(is) != AV_SYNC_VIDEO_MASTER)) && time > is->frame_timer + duration){
                     is->frame_drops_late++;
+                   //  printf("------------------ 2 ---------------\n");
                     frame_queue_next(&is->pictq);
                     goto retry;
                 }
@@ -1683,6 +1681,7 @@ retry:
                 }
             }
 
+            // printf("---------------------- 3--------------------------\n");
             frame_queue_next(&is->pictq);
             is->force_refresh = 1;
 
@@ -2769,6 +2768,7 @@ static int is_realtime(AVFormatContext *s)
   this function is for abr schedule
   tpt(Mbps), buffer(KB)
 */
+static void stream_cycle_channel(VideoState *is, int codec_type);
 static void abr_update(enum AVMediaType type, AVFormatContext* ic, VideoState* is) {
     DASHContext* dc = ic->priv_data;
     struct representation* cur_rep = NULL;
@@ -2791,9 +2791,12 @@ static void abr_update(enum AVMediaType type, AVFormatContext* ic, VideoState* i
         // buffer_level = is->pictq.size;
         
         double dur = 0;
-        for (int i = 0; i < is->pictq.size; ++i) {
+        int s = is->pictq.size;
+        for (int i = FFMAX(is->pictq.rindex,is->pictq.windex), j = 0; j < s; i = (i + 1 == is->pictq.max_size ? 0 : i + 1), j++) {
             dur += is->pictq.queue[i].duration;
+//            printf("[%d %f],",is->pictq.queue[i].serial, is->pictq.queue[i].pts);
         }
+//        printf(" (%d)\n",s);
         buffer_level = dur;
     } else if (type == AVMEDIA_TYPE_AUDIO) {
         cur_rep = dc->periods[dc->current_period]->audios[st_index[type] - dc->periods[dc->current_period]->n_videos];
@@ -2807,7 +2810,7 @@ static void abr_update(enum AVMediaType type, AVFormatContext* ic, VideoState* i
     timeout = 0;
     while (http && http->http_req_end == 0) {
         av_usleep(100 * 1000);
-        if ( (av_gettime() - t1) / 1000 > 5000 ) {
+        if ( (av_gettime() - t1) / 1000 > 2000 ) {
             timeout = 1;
             break;
         }
@@ -2827,9 +2830,17 @@ static void abr_update(enum AVMediaType type, AVFormatContext* ic, VideoState* i
     
     choosen_idx = dc->dashdec_get_stream(ic, type);
     if (choosen_idx >= 0 && choosen_idx != st_index[type]) {
-        // stream_component_close(is, st_index[type]);
-        // stream_component_open(is, choosen_idx);
-        // st_index[type] = choosen_idx;
+        // stream_cycle_channel(is, AVMEDIA_TYPE_VIDEO);
+        double cur_time = get_master_clock(is);
+        if ((int)cur_time % 4 == 0 || ((int)cur_time + 1) % 4 == 0) {
+            will_switch = 1; 
+            stream_component_close(is, st_index[type]);
+            stream_component_open(is, choosen_idx);
+            st_index[type] = choosen_idx;
+            will_switch = 0;
+            // cur_time += 0.5;
+            // stream_seek(is, (int64_t)(cur_time * AV_TIME_BASE), 0, 0);
+        }
     }
 
     av_log(ic, AV_LOG_WARNING, "[%ld]DASH Metric(%s): tpt=%f, buffer=%f, choosen=%d, timeout=%d, cur_bandwith=%d\n", av_gettime(),
@@ -3116,6 +3127,15 @@ static int read_thread(void *arg)
                 goto fail;
             }
         }
+        
+        while (will_switch) {
+            printf("----------------------------\n");
+            SDL_LockMutex(wait_mutex);
+            SDL_CondWaitTimeout(is->continue_read_thread, wait_mutex, 10);
+            SDL_UnlockMutex(wait_mutex);
+        }
+
+
         ret = av_read_frame(ic, pkt);
         
         if (ret < 0) {

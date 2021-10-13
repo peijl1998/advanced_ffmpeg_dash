@@ -29,7 +29,7 @@ static int abr_get_stream_alwaysfirst(ABRContext* ac, int* bandwidth, int size) 
 
 static int abr_get_stream_simplethroughput(ABRContext* ac, int* bandwidth, int size) {
     int best_idx = -1, best_bw = -1, least_idx = -1, least_bw = INT_MAX, cur_bw;
-    float avg_tpt = abr_get_avg_tpt(ac);
+    float avg_tpt = abr_get_avg_tpt(ac) * 0.9;
     if (avg_tpt < 0) return -1;
     
     for (int i = 0; i < size; ++i) {

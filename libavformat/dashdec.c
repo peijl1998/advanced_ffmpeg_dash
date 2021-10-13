@@ -52,6 +52,8 @@ static void dashdec_add_metric(AVFormatContext* s, enum AVMediaType type, float 
                    buffer_c);
 }
 
+
+int cur_stream = -1, next_stream = -1;
 static int dashdec_get_stream(AVFormatContext* s, enum AVMediaType type) {
     DASHContext* c = s->priv_data; 
     int size, *bandwidth, ai;
@@ -68,7 +70,7 @@ static int dashdec_get_stream(AVFormatContext* s, enum AVMediaType type) {
             bandwidth[i] = c->periods[c->current_period]->videos[i]->bandwidth;
         }
         ai = abr_get_stream(c->video_abr, bandwidth, size);
-        return ai == -1 ? -1 : c->periods[c->current_period]->videos[ai]->stream_index;
+        next_stream = ( ai == -1 ? -1 : c->periods[c->current_period]->videos[ai]->stream_index );
     } else {
         size = c->periods[c->current_period]->n_audios;
         bandwidth = (int*)malloc(sizeof(int) * size);
@@ -76,21 +78,22 @@ static int dashdec_get_stream(AVFormatContext* s, enum AVMediaType type) {
             bandwidth[i] = c->periods[c->current_period]->audios[i]->bandwidth;
         }
         ai = abr_get_stream(c->audio_abr, bandwidth, size);
-        return ai == -1 ? -1 : c->periods[c->current_period]->audios[ai]->stream_index;
+        next_stream = ( ai == -1 ? -1 : c->periods[c->current_period]->audios[ai]->stream_index );
     }
-
+    
+    return cur_stream;
 }
 
 static void init_dash_abr(DASHContext* c) {
     c->video_abr = (ABRContext* )malloc(sizeof(ABRContext));
     c->audio_abr = (ABRContext* )malloc(sizeof(ABRContext));
     
-    c->video_abr->max_history_len = 2;
+    c->video_abr->max_history_len = 1;
     c->video_abr->throughput_history = NULL;
     c->video_abr->buffer_level = 0;
     c->video_abr->algorithm = SimpleThroughput; //AlwaysFirst;
     
-    c->audio_abr->max_history_len = 2;
+    c->audio_abr->max_history_len = 1;
     c->audio_abr->throughput_history = NULL;
     c->audio_abr->buffer_level = 0;
     c->audio_abr->algorithm = SimpleThroughput; //AlwaysFirst;
@@ -1723,6 +1726,10 @@ static int read_from_url(struct representation *pls, struct fragment *seg,
     ret = avio_read(pls->input, buf, buf_size);
     if (ret > 0)
         pls->cur_seg_offset += ret;
+    else {
+        if (cur_stream != next_stream)  av_log(NULL, AV_LOG_INFO, "[%ld][DASH] Change bitrate.\n", av_gettime());
+        cur_stream = next_stream;
+    }
 
     return ret;
 }
@@ -1747,7 +1754,7 @@ static int open_input(DASHContext *c, struct representation *pls, struct fragmen
     }
 
     ff_make_absolute_url(url, c->max_url_size, c->base_url, seg->url);
-    av_log(pls->parent, AV_LOG_INFO, "DASH request for url '%s', offset %"PRId64" end %"PRId64"\n",
+    av_log(pls->parent, AV_LOG_INFO, "[%ld]DASH request for url '%s', offset %"PRId64" end %"PRId64"\n", av_gettime(),
            url, seg->url_offset, seg->url_offset + seg->size - 1);
     
     ret = open_url(pls->parent, &pls->input, url, &c->avio_opts, opts, NULL);
@@ -1842,8 +1849,8 @@ restart:
 
             /* BUPT: hack, for live profile, if requested segment is not ready in server, cur_seq_no++ will cause many invalid request. */
             if (!c->is_live) {
-                v->cur_seq_no++;
-            } else {
+           //     v->cur_seq_no++;
+           //  } else {
                 av_usleep(100 * 1000);
             }
             goto restart;
@@ -2454,6 +2461,7 @@ set_seq_num:
 
 static int dash_read_seek(AVFormatContext *s, int stream_index, int64_t timestamp, int flags)
 {
+    av_log(s, AV_LOG_INFO, "dash seek triggered!\n");
     int ret = 0, i, target_period = 0;
     DASHContext *c = s->priv_data;
     int64_t seek_pos_msec = av_rescale_rnd(timestamp, 1000,
